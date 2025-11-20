@@ -1,0 +1,16 @@
+{
+    "name": "Envoy PQC Builder",
+    "image": "envoyproxy/envoy-build-ubuntu:75238004b0fcfd8a7f71d380d7a774dda5c39622",
+    
+    "remoteUser": "root", 
+    // "workspaceFolder": "/workspace",
+    
+    // This command creates the directory and gives the 'vscode' user ownership.
+    "onCreateCommand": "mkdir -p /workspace && chown -R vscode /workspace", 
+    
+    "postCreateCommand": "bazel version", 
+    "appPort": [
+        "10000:10000"
+    ],
+    "shutdownAction": "stopContainer"
+}

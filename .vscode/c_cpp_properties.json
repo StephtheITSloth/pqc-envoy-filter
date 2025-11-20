@@ -1,0 +1,17 @@
+{
+    "configurations": [
+        {
+            "name": "Bazel/Docker",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/test"
+            ],
+            "compilerPath": "C:/Program Files/Microsoft Visual Studio/...", // Your local C++ compiler path (optional but recommended)
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "windows-msvc-x64" // Or linux-gcc-x64 if you use VS Code remote dev
+        }
+    ],
+    "version": 4
+}
