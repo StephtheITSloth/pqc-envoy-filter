@@ -10,7 +10,7 @@ namespace PqcFilter {
 
 class PqcFilterConfig {
 public:
-  PqcFilterConfig();
+  PqcFilterConfig(const std::string& algorithm_name);
 
   const std::string& getAlgorithmName() const { return algorithm_name_; }
 

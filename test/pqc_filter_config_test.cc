@@ -8,7 +8,7 @@ using namespace Envoy::Extensions::HttpFilters::PqcFilter;
 
 TEST(PqcFilterConfigTest, CanRetrieveAlgorithmName) {
   // ARRANGE
-  PqcFilterConfig config; 
+  PqcFilterConfig config("Kyber768"); 
   // We can imagine the constructor or a setter initializing this value.
   const std::string expected_name = "Kyber768"; 
 

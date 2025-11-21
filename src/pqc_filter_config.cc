@@ -7,7 +7,7 @@ namespace Extensions {
 namespace HttpFilters {
 namespace PqcFilter {
 
-PqcFilterConfig::PqcFilterConfig() : algorithm_name_("Kyber768") {}
+PqcFilterConfig::PqcFilterConfig(const std::string& algorithm_name) : algorithm_name_(algorithm_name) {}
 
 } // namespace PqcFilter
 } // namespace HttpFilters

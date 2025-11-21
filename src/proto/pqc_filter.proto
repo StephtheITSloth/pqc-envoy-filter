@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package envoy.extensions.filters.http.pqc_filter.v3;
+
+message PqcFilter{
+
+    string algrithm_name = 1;
+}
