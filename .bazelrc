@@ -1,0 +1,20 @@
+# Bazel 6.5.0 configuration for production-ready Envoy filter
+# WORKSPACE is the default in Bazel 6 (no Bzlmod yet)
+
+# Build settings
+build --cxxopt=-std=c++17
+build --host_cxxopt=-std=c++17
+
+# Enable color output
+common --color=yes
+
+# Show test output
+test --test_output=errors
+
+# Python toolchain - use system Python instead of hermetic
+build --action_env=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Disable download checksums for development (temporary workaround for outdated checksums)
+common --experimental_repository_downloader_retries=0
+fetch --experimental_check_external_repository_files=false
+build --experimental_check_external_repository_files=false

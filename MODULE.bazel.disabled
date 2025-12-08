@@ -1,0 +1,17 @@
+###############################################################################
+# Minimal standalone Envoy filter build configuration
+#
+# Strategy: Headers-only approach
+# - Bzlmod: Modern dependencies (googletest, rules_cc)
+# - WORKSPACE: Envoy API protos + protobuf (older, stable versions)
+# - Runtime: Link against official Envoy binary in Docker
+###############################################################################
+
+# Register the standard C++ rules
+bazel_dep(name = "rules_cc", version = "0.1.1")
+
+# Register the Google Test framework for unit testing
+bazel_dep(name = "googletest", version = "1.14.0.bcr.1")
+
+# All other dependencies come from WORKSPACE (protobuf 3.15.8, envoy_api)
+# This avoids Bazel 8 compatibility issues with newer Envoy versions

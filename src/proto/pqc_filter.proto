@@ -2,7 +2,22 @@ syntax = "proto3";
 
 package envoy.extensions.filters.http.pqc_filter.v3;
 
-message PqcFilter{
+// Production-grade configuration for Post-Quantum Cryptography HTTP Filter
+// Follows Envoy extension naming conventions for marketplace compatibility
+// Note: Validation rules removed for headers-only build compatibility
+message PqcFilterConfig {
+    // Post-quantum algorithm to use
+    // Supported: "kyber512", "kyber768", "kyber1024", "ml-kem-512", "ml-kem-768", "ml-kem-1024"
+    // Required field - validation must be done in C++ code
+    string algorithm_name = 1;
 
-    string algrithm_name = 1;
+    // Enable verbose logging for debugging and audit trails
+    // Default: false for production performance
+    bool enable_logging = 2;
+
+    // Maximum bytes to inspect per request for PQC handshake
+    // Range: 0 bytes (disabled) to 1MB
+    // Default: 4096 bytes
+    // Validation must be done in C++ code
+    uint32 max_inspect_bytes = 3;
 }
