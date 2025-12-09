@@ -18,8 +18,21 @@ cc_test(
         "//src:pqc_filter_config_lib",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
-        
+
         # Add Envoy test utilities
         "@envoy//test/mocks/server:factory_context_mocks",
+    ],
+)
+
+cc_test(
+    name = "pqc_filter_test",
+    srcs = [
+        "pqc_filter_test.cc",
+        "pqc_filter_testable.h",  # Testable version with mocks
+    ],
+    deps = [
+        "//src:pqc_filter_config_lib",
+        "//test/mocks:mock_envoy_interfaces",
+        "@com_google_googletest//:gtest_main",
     ],
 )
