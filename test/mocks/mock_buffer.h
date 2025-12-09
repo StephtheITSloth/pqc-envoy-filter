@@ -12,6 +12,17 @@ namespace Envoy {
 namespace Buffer {
 
 /**
+ * RawSlice represents a contiguous chunk of buffer memory
+ * Matches Envoy's Buffer::RawSlice structure
+ */
+struct RawSlice {
+  void* mem_;    // Pointer to the data
+  size_t len_;   // Length of this slice
+
+  RawSlice(void* mem, size_t len) : mem_(mem), len_(len) {}
+};
+
+/**
  * Minimal mock of Buffer::Instance interface
  * Only implements methods needed for our PqcFilter tests
  */
@@ -38,6 +49,19 @@ public:
       size = data_.size() - start;  // Don't read past end
     }
     std::memcpy(data, data_.data() + start, size);
+  }
+
+  // Get raw slices (production-ready API)
+  // In real Envoy, buffer can be fragmented across multiple slices
+  // Our mock simulates this by returning a single slice
+  std::vector<RawSlice> getRawSlices() const {
+    std::vector<RawSlice> slices;
+    if (!data_.empty()) {
+      // Cast away const for the mock (safe because we control the lifetime)
+      // In production Envoy, slices point to actual buffer memory
+      slices.emplace_back(const_cast<uint8_t*>(data_.data()), data_.size());
+    }
+    return slices;
   }
 
   // Access underlying data (for testing convenience)

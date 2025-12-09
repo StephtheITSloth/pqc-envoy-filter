@@ -35,29 +35,52 @@ public:
 
   Http::FilterDataStatus decodeData(Buffer::Instance& data,
                                     bool end_stream) {
-    // TODO: Implement hex logging here
-    uint64_t buffer_length =  data.length();
+    // Production-ready implementation using getRawSlices()
+    uint64_t buffer_length = data.length();
 
-    if (buffer_length == 0){
+    if (buffer_length == 0) {
       ENVOY_LOG(debug, "Received empty buffer");
       return Http::FilterDataStatus::Continue;
     }
 
     uint64_t bytes_to_log = std::min(buffer_length, static_cast<uint64_t>(10));
 
+    // Get raw slices (zero-copy access)
+    std::vector<Buffer::RawSlice> slices = data.getRawSlices();
+
     std::string hex_string;
     hex_string.reserve(bytes_to_log * 3);
 
-    std::vector<uint8_t> bytes(bytes_to_log);
-    data.copyOut(0, bytes_to_log, bytes.data());
+    uint64_t bytes_logged = 0;
 
-    for (uint64_t i = 0; i < bytes_to_log; i++) {
-      char hex_buf[4];
-      snprintf(hex_buf, sizeof(hex_buf), "%02X ", bytes[i]);
-      hex_string += hex_buf;
+    for (const auto& slice : slices) {
+      if (bytes_logged >= bytes_to_log) {
+        break;
+      }
+
+      const uint8_t* slice_data = static_cast<const uint8_t*>(slice.mem_);
+      size_t slice_len = slice.len_;
+
+      uint64_t bytes_from_slice = std::min(
+          static_cast<uint64_t>(slice_len),
+          bytes_to_log - bytes_logged
+      );
+
+      for (uint64_t i = 0; i < bytes_from_slice; i++) {
+        char hex_buf[4];
+        snprintf(hex_buf, sizeof(hex_buf), "%02X ", slice_data[i]);
+        hex_string += hex_buf;
+      }
+
+      bytes_logged += bytes_from_slice;
     }
 
-    ENVOY_LOG(info, "First {} bytes (hex): {}", bytes_to_log, hex_string);
+    // Remove trailing space
+    if (!hex_string.empty()) {
+      hex_string.pop_back();
+    }
+
+    ENVOY_LOG(info, "First {} bytes (hex): {}", bytes_logged, hex_string);
 
     return Http::FilterDataStatus::Continue;
   }
