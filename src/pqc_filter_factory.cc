@@ -30,3 +30,8 @@ REGISTER_FACTORY(PqcFilterFactory,
 } // namespace HttpFilters
 } // namespace Extensions
 } // namespace Envoy
+
+//This is MAGIC - static registration:
+//Happens at program startup (before main())
+//Registers your factory in Envoy's global registry
+//Makes your filter discoverable by name
