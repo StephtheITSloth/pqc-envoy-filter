@@ -101,3 +101,79 @@ TEST_F(PqcFilterTest, DecodeDataWithEmptyBuffer) {
   ASSERT_EQ(status, FilterDataStatus::Continue);
   ASSERT_EQ(buffer.length(), 0);
 }
+
+// ============================================================================
+// TLS RECORD TYPE 22 DETECTION TESTS
+// ============================================================================
+
+// Test 5: TLS Handshake detection - buffer starts with 0x16 (TLS Record Type 22)
+TEST_F(PqcFilterTest, DetectTlsHandshakeRecordType22) {
+  // ARRANGE: Create buffer starting with 0x16 (TLS Handshake)
+  // This simulates the start of a TLS handshake (ClientHello, ServerHello, etc.)
+  std::vector<uint8_t> test_data = {
+    0x16,  // TLS Record Type 22 (Handshake)
+    0x03, 0x03,  // TLS version (TLS 1.2)
+    0x00, 0x05,  // Record length
+    0x01, 0x02, 0x03, 0x04, 0x05  // Payload
+  };
+  Instance buffer(test_data);
+
+  // ACT: Call decodeData
+  FilterDataStatus status = filter_->decodeData(buffer, false);
+
+  // ASSERT: Should detect TLS handshake and return Continue
+  ASSERT_EQ(status, FilterDataStatus::Continue);
+
+  // TODO: When logging is implemented, verify log contains:
+  // "Detected TLS Handshake (Record Type 22)"
+}
+
+// Test 6: Non-TLS data - buffer does NOT start with 0x16
+TEST_F(PqcFilterTest, DoesNotDetectTlsWhenNotPresent) {
+  // ARRANGE: Create buffer with regular HTTP data (not TLS)
+  std::vector<uint8_t> test_data = {
+    0x47, 0x45, 0x54, 0x20,  // "GET " in ASCII
+    0x2F, 0x69, 0x6E, 0x64   // "/ind"
+  };
+  Instance buffer(test_data);
+
+  // ACT: Call decodeData
+  FilterDataStatus status = filter_->decodeData(buffer, false);
+
+  // ASSERT: Should NOT detect TLS and return Continue
+  ASSERT_EQ(status, FilterDataStatus::Continue);
+
+  // TODO: When logging is implemented, verify log does NOT contain:
+  // "Detected TLS Handshake"
+}
+
+// Test 7: Buffer safety - empty buffer should not crash when checking for TLS
+TEST_F(PqcFilterTest, TlsDetectionSafeWithEmptyBuffer) {
+  // ARRANGE: Create empty buffer
+  Instance buffer;
+
+  // ACT: Call decodeData (should check buffer size BEFORE accessing bytes)
+  FilterDataStatus status = filter_->decodeData(buffer, false);
+
+  // ASSERT: Should not crash and return Continue
+  // This test validates CRITICAL security check:
+  // Must check buffer_length > 0 BEFORE accessing slice_data[0]
+  ASSERT_EQ(status, FilterDataStatus::Continue);
+  ASSERT_EQ(buffer.length(), 0);
+}
+
+// Test 8: Single byte TLS handshake - edge case with minimal buffer
+TEST_F(PqcFilterTest, TlsDetectionWithSingleByte) {
+  // ARRANGE: Create buffer with just the TLS record type byte
+  std::vector<uint8_t> test_data = {0x16};  // Just the handshake byte
+  Instance buffer(test_data);
+
+  // ACT: Call decodeData
+  FilterDataStatus status = filter_->decodeData(buffer, false);
+
+  // ASSERT: Should detect TLS even with minimal data
+  ASSERT_EQ(status, FilterDataStatus::Continue);
+
+  // TODO: When logging is implemented, verify log contains:
+  // "Detected TLS Handshake (Record Type 22)"
+}

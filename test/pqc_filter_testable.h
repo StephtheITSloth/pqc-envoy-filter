@@ -43,11 +43,22 @@ public:
       return Http::FilterDataStatus::Continue;
     }
 
-    uint64_t bytes_to_log = std::min(buffer_length, static_cast<uint64_t>(10));
-
-    // Get raw slices (zero-copy access)
+    // Get raw slices for inspection
     std::vector<Buffer::RawSlice> slices = data.getRawSlices();
 
+    // SECURITY: Check for TLS Record Type 22 (Handshake = 0x16)
+    // This is critical for PQC key exchange detection
+    // IMPORTANT: Always check buffer size BEFORE accessing bytes
+    if (!slices.empty() && slices[0].len_ > 0) {
+      const uint8_t* first_byte_ptr = static_cast<const uint8_t*>(slices[0].mem_);
+      if (first_byte_ptr[0] == 0x16) {
+        ENVOY_LOG(info, "Detected TLS Handshake (Record Type 22)");
+      }
+    }
+
+    uint64_t bytes_to_log = std::min(buffer_length, static_cast<uint64_t>(10));
+
+    // Build hex string from slices (already retrieved above)
     std::string hex_string;
     hex_string.reserve(bytes_to_log * 3);
 

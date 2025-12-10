@@ -39,6 +39,16 @@ Http::FilterDataStatus PqcFilter::decodeData(
   // Production-ready: handles fragmented buffers efficiently
   Buffer::RawSliceVector slices = data.getRawSlices();
 
+  if (!slices.empty()) {
+    if(slices[0].len_ > 0) {
+      const uint8_t* first_byte_ptr = static_cast<const uint8_t*>(slices[0].mem_);
+
+      if (first_byte_ptr[0] == 0x16) {
+        ENVOY_LOG(info, "Detected TLS Handshake (Record Type 22)");
+      }
+    }
+  }
+
   // Build hex string by iterating through slices
   std::string hex_string;
   hex_string.reserve(bytes_to_log * 3);  // Pre-allocate: "XX " per byte
