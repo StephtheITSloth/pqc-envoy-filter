@@ -60,6 +60,33 @@ http_archive(
 )
 
 # ============================================================================
+# rules_foreign_cc - Build CMake projects with Bazel
+# ============================================================================
+
+http_archive(
+    name = "rules_foreign_cc",
+    sha256 = "2a4d07cd64b0719b39a7c12218a3e507672b82a97b98c6a89d38565894cf7c51",
+    strip_prefix = "rules_foreign_cc-0.9.0",
+    url = "https://github.com/bazelbuild/rules_foreign_cc/archive/refs/tags/0.9.0.tar.gz",
+)
+
+load("@rules_foreign_cc//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
+
+rules_foreign_cc_dependencies()
+
+# ============================================================================
+# liboqs - Post-Quantum Cryptography Library
+# ============================================================================
+
+http_archive(
+    name = "liboqs",
+    sha256 = "3983f7cd1247f37fb76a040e6fd684894d44a84cecdcfbdb90559b3216684b5c",
+    strip_prefix = "liboqs-0.15.0",
+    urls = ["https://github.com/open-quantum-safe/liboqs/archive/refs/tags/0.15.0.tar.gz"],
+    build_file = "//third_party:liboqs.BUILD",
+)
+
+# ============================================================================
 # Production Strategy: Headers-Only + Runtime Linking
 # ============================================================================
 #

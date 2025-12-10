@@ -36,3 +36,21 @@ cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "liboqs_integration_test",
+    srcs = ["liboqs_integration_test.cc"],
+    deps = [
+        "@liboqs//:oqs",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_binary(
+    name = "check_algorithms",
+    srcs = ["check_algorithms.cc"],
+    linkopts = ["-lpthread"],
+    deps = [
+        "@liboqs//:oqs",
+    ],
+)

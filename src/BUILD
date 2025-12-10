@@ -52,7 +52,13 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":pqc_filter_config_lib",
-        
+
+        # Post-Quantum Cryptography library
+        # TODO(optimization): Current build is ~15MB (includes SLH-DSA/SPHINCS+)
+        #                     Target is ~1.5MB (Kyber + Dilithium only)
+        #                     Need to use OQS_ENABLE_SIG_SLH_DSA=OFF in liboqs.BUILD
+        "@liboqs//:oqs",
+
         # Envoy filter interfaces
         "@envoy//include/envoy/http:filter_interface",
         "@envoy//source/common/buffer:buffer_lib",

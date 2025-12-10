@@ -1,11 +1,17 @@
 # Stage 1: The Build Stage
 FROM envoyproxy/envoy-build-ubuntu:latest AS builder
+
+# Install build-time dependencies for PQC support
+# CMake: Required by rules_foreign_cc to build liboqs
+# Ninja: Fast build system used by CMake
+RUN cd /tmp && \
+    wget -q https://github.com/Kitware/CMake/releases/download/v3.27.7/cmake-3.27.7-linux-x86_64.sh && \
+    sh cmake-3.27.7-linux-x86_64.sh --prefix=/usr/local --skip-license && \
+    rm cmake-3.27.7-linux-x86_64.sh && \
+    cmake --version
+
 COPY . /workspace
 WORKDIR /workspace
-
-
-# Install the necessary build-time tools (like liboqs later)
-# RUN ...
 
 # TDD step: build and run tests first
 RUN bazel build //test/...
