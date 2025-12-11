@@ -210,6 +210,52 @@ bool PqcFilter::clientEncapsulate(const uint8_t* server_public_key,
   return true;
 }
 
+bool PqcFilter::serverDecapsulate(const uint8_t* ciphertext,
+                                   size_t ciphertext_len,
+                                   uint8_t* out_shared_secret) const {
+  // Validate inputs
+  if (!kyber_kem_) {
+    ENVOY_LOG(error, "KEM not initialized - cannot perform decapsulation");
+    return false;
+  }
+
+  if (!ciphertext || !out_shared_secret) {
+    ENVOY_LOG(error, "Invalid parameters for decapsulation - null pointer");
+    return false;
+  }
+
+  if (ciphertext_len != kyber_kem_->length_ciphertext) {
+    ENVOY_LOG(error, "Invalid ciphertext length: expected {}, got {}",
+              kyber_kem_->length_ciphertext, ciphertext_len);
+    return false;
+  }
+
+  if (!kyber_secret_key_) {
+    ENVOY_LOG(error, "Server secret key not available - cannot decapsulate");
+    return false;
+  }
+
+  // Perform KEM decapsulation (server-side operation)
+  // This uses the server's secret key to decrypt the ciphertext
+  // and recover the same shared secret the client generated
+  OQS_STATUS status = OQS_KEM_decaps(
+      kyber_kem_.get(),
+      out_shared_secret,     // Output: recovered shared secret (32 bytes)
+      ciphertext,            // Input: ciphertext from client (1088 bytes)
+      kyber_secret_key_.get() // Input: server's secret key (2400 bytes)
+  );
+
+  if (status != OQS_SUCCESS) {
+    ENVOY_LOG(error, "KEM decapsulation failed - status: {}", status);
+    return false;
+  }
+
+  ENVOY_LOG(debug, "Server decapsulation successful - recovered shared_secret_size: {} bytes",
+            kyber_kem_->length_shared_secret);
+
+  return true;
+}
+
 } // namespace PqcFilter
 } // namespace HttpFilters
 } // namespace Extensions

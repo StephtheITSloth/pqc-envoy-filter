@@ -346,3 +346,166 @@ TEST_F(PqcFilterTest, ClientEncapsulationFailsWithNullOutputs) {
   );
   ASSERT_FALSE(success2);
 }
+
+// ============================================================================
+// KEM DECAPSULATION TESTS (Server-side key exchange)
+// ============================================================================
+
+// Test 15: Server decapsulation - recover shared secret from ciphertext
+TEST_F(PqcFilterTest, ServerDecapsulationSucceeds) {
+  // ARRANGE: Simulate client encapsulation first
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  std::vector<uint8_t> ciphertext(1088);
+  std::vector<uint8_t> client_secret(32);
+
+  bool encaps_success = filter_->clientEncapsulate(
+      server_public_key,
+      1184,
+      ciphertext.data(),
+      client_secret.data()
+  );
+  ASSERT_TRUE(encaps_success);
+
+  // ACT: Server decapsulates to recover shared secret
+  std::vector<uint8_t> server_secret(32);
+  bool decaps_success = filter_->serverDecapsulate(
+      ciphertext.data(),
+      1088,
+      server_secret.data()
+  );
+
+  // ASSERT: Decapsulation should succeed
+  ASSERT_TRUE(decaps_success);
+
+  // Verify server's secret has data
+  bool server_secret_has_data = false;
+  for (uint8_t byte : server_secret) {
+    if (byte != 0) {
+      server_secret_has_data = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(server_secret_has_data);
+}
+
+// Test 16: Server decapsulation with null ciphertext - should fail
+TEST_F(PqcFilterTest, ServerDecapsulationFailsWithNullCiphertext) {
+  // ARRANGE: Create output buffer
+  std::vector<uint8_t> server_secret(32);
+
+  // ACT: Try to decapsulate with null ciphertext
+  bool success = filter_->serverDecapsulate(
+      nullptr,  // Invalid: null ciphertext
+      1088,
+      server_secret.data()
+  );
+
+  // ASSERT: Should fail
+  ASSERT_FALSE(success);
+}
+
+// Test 17: Server decapsulation with invalid ciphertext length - should fail
+TEST_F(PqcFilterTest, ServerDecapsulationFailsWithInvalidCiphertextLength) {
+  // ARRANGE: Create valid ciphertext
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  std::vector<uint8_t> ciphertext(1088);
+  std::vector<uint8_t> client_secret(32);
+
+  filter_->clientEncapsulate(
+      server_public_key,
+      1184,
+      ciphertext.data(),
+      client_secret.data()
+  );
+
+  std::vector<uint8_t> server_secret(32);
+
+  // ACT: Try to decapsulate with wrong ciphertext length
+  bool success = filter_->serverDecapsulate(
+      ciphertext.data(),
+      999,  // Invalid: wrong length (should be 1088)
+      server_secret.data()
+  );
+
+  // ASSERT: Should fail
+  ASSERT_FALSE(success);
+}
+
+// Test 18: Server decapsulation with null output buffer - should fail
+TEST_F(PqcFilterTest, ServerDecapsulationFailsWithNullOutput) {
+  // ARRANGE: Create valid ciphertext
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  std::vector<uint8_t> ciphertext(1088);
+  std::vector<uint8_t> client_secret(32);
+
+  filter_->clientEncapsulate(
+      server_public_key,
+      1184,
+      ciphertext.data(),
+      client_secret.data()
+  );
+
+  // ACT: Try to decapsulate with null output buffer
+  bool success = filter_->serverDecapsulate(
+      ciphertext.data(),
+      1088,
+      nullptr  // Invalid: null output
+  );
+
+  // ASSERT: Should fail
+  ASSERT_FALSE(success);
+}
+
+// ============================================================================
+// FULL KEY EXCHANGE INTEGRATION TEST
+// ============================================================================
+
+// Test 19: Complete key exchange - verify client and server get identical secrets
+TEST_F(PqcFilterTest, FullKeyExchangeProducesIdenticalSharedSecrets) {
+  // ARRANGE: Get server's public key
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  size_t public_key_size = filter_->getKyberPublicKeySize();
+
+  // Client buffers
+  std::vector<uint8_t> ciphertext(1088);
+  std::vector<uint8_t> client_shared_secret(32);
+
+  // Server buffer
+  std::vector<uint8_t> server_shared_secret(32);
+
+  // ACT: Perform complete key exchange
+
+  // Step 1: Client encapsulates (generates shared secret + ciphertext)
+  bool encaps_success = filter_->clientEncapsulate(
+      server_public_key,
+      public_key_size,
+      ciphertext.data(),
+      client_shared_secret.data()
+  );
+  ASSERT_TRUE(encaps_success);
+
+  // Step 2: Server decapsulates (recovers shared secret from ciphertext)
+  bool decaps_success = filter_->serverDecapsulate(
+      ciphertext.data(),
+      1088,
+      server_shared_secret.data()
+  );
+  ASSERT_TRUE(decaps_success);
+
+  // ASSERT: Both shared secrets must be identical!
+  // This is the CRITICAL property of KEM - both parties derive the same secret
+  for (size_t i = 0; i < 32; i++) {
+    ASSERT_EQ(client_shared_secret[i], server_shared_secret[i])
+        << "Shared secret mismatch at byte " << i;
+  }
+
+  // Additional verification: secrets are not all zeros
+  bool has_nonzero = false;
+  for (uint8_t byte : client_shared_secret) {
+    if (byte != 0) {
+      has_nonzero = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(has_nonzero) << "Shared secret should not be all zeros";
+}

@@ -69,6 +69,23 @@ public:
                          uint8_t* out_ciphertext,
                          uint8_t* out_shared_secret) const;
 
+  /**
+   * Server-side KEM decapsulation.
+   *
+   * This method performs the server's role in the key exchange:
+   * 1. Takes the ciphertext from the client
+   * 2. Uses the server's secret key to decrypt it
+   * 3. Recovers the same shared secret the client generated
+   *
+   * @param ciphertext The ciphertext from the client (1088 bytes for Kyber768)
+   * @param ciphertext_len Length of the ciphertext
+   * @param out_shared_secret Output buffer for shared secret (must be pre-allocated, 32 bytes)
+   * @return true if decapsulation succeeded, false otherwise
+   */
+  bool serverDecapsulate(const uint8_t* ciphertext,
+                         size_t ciphertext_len,
+                         uint8_t* out_shared_secret) const;
+
 private:
   std::shared_ptr<PqcFilterConfig> config_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{nullptr};
