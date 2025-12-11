@@ -1,8 +1,10 @@
 #pragma once
 
+#include <oqs/oqs.h>
+
 #include "envoy/http/filter.h"
 #include "source/common/common/logger.h"
-
+#include "src/pqc_crypto_utils.h"
 #include "src/pqc_filter_config.h"
 
 namespace Envoy {
@@ -30,6 +32,15 @@ public:
 private:
   std::shared_ptr<PqcFilterConfig> config_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{nullptr};
+  // Kyber-768 KEM instance (manages the algorithm)
+  std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)> kyber_kem_;
+
+  // Kyber-768 keys (securely managed)
+  SecureBuffer kyber_public_key_;
+  SecureBuffer kyber_secret_key_;
+
+  // Initialization function
+  void initializeKyber();
 };
 
 } // namespace PqcFilter

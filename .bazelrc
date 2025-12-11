@@ -18,3 +18,4 @@ build --action_env=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:
 common --experimental_repository_downloader_retries=0
 fetch --experimental_check_external_repository_files=false
 build --experimental_check_external_repository_files=false
+startup --output_user_root=/workspaces/.bazel-cache

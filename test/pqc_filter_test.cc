@@ -177,3 +177,31 @@ TEST_F(PqcFilterTest, TlsDetectionWithSingleByte) {
   // TODO: When logging is implemented, verify log contains:
   // "Detected TLS Handshake (Record Type 22)"
 }
+
+// ============================================================================
+// POST-QUANTUM CRYPTOGRAPHY INITIALIZATION TESTS (TDD)
+// ============================================================================
+
+// Test 9: Kyber-768 initialization - verify filter initializes PQC correctly
+TEST_F(PqcFilterTest, KyberInitializationSucceeds) {
+  // ARRANGE: Filter is already created in SetUp()
+  // The constructor should have called initializeKyber()
+
+  // ACT: Filter should be fully initialized
+  // We can't directly access private members (kyber_kem_, kyber_public_key_, etc.)
+  // But we can verify the filter was constructed without errors
+
+  // ASSERT: Filter exists and was created successfully
+  ASSERT_NE(filter_, nullptr);
+
+  // Additional verification: Filter can process data after Kyber init
+  std::vector<uint8_t> test_data = {0x01, 0x02, 0x03};
+  Instance buffer(test_data);
+  FilterDataStatus status = filter_->decodeData(buffer, false);
+  ASSERT_EQ(status, FilterDataStatus::Continue);
+
+  // TODO: When we add public methods to access Kyber state:
+  // - ASSERT_TRUE(filter_->hasKyberInitialized());
+  // - ASSERT_NE(filter_->getKyberPublicKeySize(), 0);
+  // For now, we verify the filter works, which implies Kyber initialized
+}

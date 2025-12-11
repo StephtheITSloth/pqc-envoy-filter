@@ -29,10 +29,12 @@ cc_test(
     srcs = [
         "pqc_filter_test.cc",
         "pqc_filter_testable.h",  # Testable version with mocks
+        "//src:pqc_crypto_utils.h",  # Secure memory utilities header
     ],
     deps = [
         "//src:pqc_filter_config_lib",
         "//test/mocks:mock_envoy_interfaces",
+        "@liboqs//:oqs",  # Post-Quantum Cryptography library
         "@com_google_googletest//:gtest_main",
     ],
 )

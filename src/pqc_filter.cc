@@ -5,8 +5,10 @@ namespace Extensions {
 namespace HttpFilters {
 namespace PqcFilter {
 
-PqcFilter::PqcFilter(std::shared_ptr<PqcFilterConfig> config) 
-    : config_(config) {}
+PqcFilter::PqcFilter(std::shared_ptr<PqcFilterConfig> config)
+    : config_(config) {
+  initializeKyber();
+}
 
 Http::FilterHeadersStatus PqcFilter::decodeHeaders(
     Http::RequestHeaderMap& headers, bool end_stream) {
@@ -100,6 +102,38 @@ void PqcFilter::setDecoderFilterCallbacks(
     Http::StreamDecoderFilterCallbacks& callbacks) {
   decoder_callbacks_ = &callbacks;
 }
+
+void PqcFilter::initializeKyber() {
+  // Create Kyber-768 KEM instance
+  // Note: We use the verbose std::unique_ptr syntax here (not auto) because
+  // this is an assignment to an existing member variable declared in the header.
+  // The header declares the type, but here we must construct and assign it.
+  kyber_kem_ = std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)>(OQS_KEM_new("Kyber768"), OQS_KEM_free);
+
+  if(!kyber_kem_) {
+    ENVOY_LOG(error, "Failed to create Kyber-768 KEM instance - algorithm not available");
+    return;
+  }
+
+  kyber_public_key_ = make_secure_buffer(kyber_kem_->length_public_key);
+  kyber_secret_key_ = make_secure_buffer(kyber_kem_->length_secret_key);
+
+  OQS_STATUS status = OQS_KEM_keypair(
+    kyber_kem_.get(),
+    kyber_public_key_.get(),
+    kyber_secret_key_.get()
+  );
+
+  if (status != OQS_SUCCESS) {
+    ENVOY_LOG(error, "Failed to generate Kyber-768 keypair - status: {}", status);
+    return;
+  }
+
+  ENVOY_LOG(info, "Kyber-768 initialized successfully - public_key_size: {} bytes, secret_key_size: {} bytes",
+  kyber_kem_->length_public_key, kyber_kem_->length_secret_key);
+
+}
+
 
 } // namespace PqcFilter
 } // namespace HttpFilters

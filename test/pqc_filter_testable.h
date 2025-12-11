@@ -11,6 +11,10 @@
 // It will use our mocked types above
 #include "src/pqc_filter_config.h"
 
+// Post-Quantum Cryptography includes
+#include <oqs/oqs.h>
+#include "src/pqc_crypto_utils.h"
+
 namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
@@ -23,7 +27,9 @@ namespace PqcFilter {
 class PqcFilter : public Http::StreamDecoderFilter,
                   public Logger::Loggable<Logger::Id::filter> {
 public:
-  explicit PqcFilter(std::shared_ptr<PqcFilterConfig> config) : config_(config) {}
+  explicit PqcFilter(std::shared_ptr<PqcFilterConfig> config) : config_(config) {
+    initializeKyber();
+  }
 
   // Http::StreamDecoderFilter interface
   Http::FilterHeadersStatus decodeHeaders(Http::RequestHeaderMap& headers,
@@ -107,6 +113,39 @@ public:
 private:
   std::shared_ptr<PqcFilterConfig> config_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{nullptr};
+
+  // Post-Quantum Cryptography - Kyber-768
+  std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)> kyber_kem_{nullptr, OQS_KEM_free};
+  SecureBuffer kyber_public_key_;
+  SecureBuffer kyber_secret_key_;
+
+  // Initialization function
+  void initializeKyber() {
+    // Simple stub for now - full implementation will be in pqc_filter.cc
+    kyber_kem_ = std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)>(
+        OQS_KEM_new("Kyber768"), OQS_KEM_free);
+
+    if (!kyber_kem_) {
+      ENVOY_LOG(error, "Failed to create Kyber-768 KEM instance");
+      return;
+    }
+
+    kyber_public_key_ = make_secure_buffer(kyber_kem_->length_public_key);
+    kyber_secret_key_ = make_secure_buffer(kyber_kem_->length_secret_key);
+
+    OQS_STATUS status = OQS_KEM_keypair(
+        kyber_kem_.get(),
+        kyber_public_key_.get(),
+        kyber_secret_key_.get()
+    );
+
+    if (status != OQS_SUCCESS) {
+      ENVOY_LOG(error, "Failed to generate Kyber-768 keypair");
+      return;
+    }
+
+    ENVOY_LOG(info, "Kyber-768 initialized successfully");
+  }
 };
 
 } // namespace PqcFilter

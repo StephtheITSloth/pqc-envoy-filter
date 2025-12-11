@@ -4,6 +4,9 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 # Note: Proto targets are generated in //src/proto:BUILD
 # ============================================================================
 
+# Export headers for test visibility
+exports_files(["pqc_crypto_utils.h"])
+
 # ============================================================================
 # Filter Configuration Library
 # ============================================================================
@@ -48,7 +51,10 @@ cc_library(
 cc_library(
     name = "pqc_filter_lib",
     srcs = ["pqc_filter.cc"],
-    hdrs = ["pqc_filter.h"],
+    hdrs = [
+        "pqc_filter.h",
+        "pqc_crypto_utils.h",  # Secure memory utilities
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":pqc_filter_config_lib",
