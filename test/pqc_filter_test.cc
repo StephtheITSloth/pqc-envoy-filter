@@ -200,8 +200,38 @@ TEST_F(PqcFilterTest, KyberInitializationSucceeds) {
   FilterDataStatus status = filter_->decodeData(buffer, false);
   ASSERT_EQ(status, FilterDataStatus::Continue);
 
-  // TODO: When we add public methods to access Kyber state:
-  // - ASSERT_TRUE(filter_->hasKyberInitialized());
-  // - ASSERT_NE(filter_->getKyberPublicKeySize(), 0);
-  // For now, we verify the filter works, which implies Kyber initialized
+  // Verify Kyber initialization using public methods
+  ASSERT_TRUE(filter_->hasKyberInitialized());
+  ASSERT_NE(filter_->getKyberPublicKeySize(), 0);
+  ASSERT_NE(filter_->getKyberPublicKey(), nullptr);
+
+  // Kyber768 should have 1184 byte public key
+  ASSERT_EQ(filter_->getKyberPublicKeySize(), 1184);
+}
+
+// Test 10: Dilithium3 (ML-DSA-65) initialization - verify digital signature capability
+TEST_F(PqcFilterTest, DilithiumInitializationSucceeds) {
+  // ARRANGE: Filter is already created in SetUp()
+  // The constructor should have called initializeDilithium()
+
+  // ACT: Filter should be fully initialized with Dilithium
+  // We can't directly access private members (dilithium_sig_, dilithium_public_key_, etc.)
+  // But we can verify the filter was constructed without errors
+
+  // ASSERT: Filter exists and was created successfully
+  ASSERT_NE(filter_, nullptr);
+
+  // Additional verification: Filter can process data after Dilithium init
+  std::vector<uint8_t> test_data = {0x01, 0x02, 0x03};
+  Instance buffer(test_data);
+  FilterDataStatus status = filter_->decodeData(buffer, false);
+  ASSERT_EQ(status, FilterDataStatus::Continue);
+
+  // Verify Dilithium initialization using public methods
+  ASSERT_TRUE(filter_->hasDilithiumInitialized());
+  ASSERT_NE(filter_->getDilithiumPublicKeySize(), 0);
+  ASSERT_NE(filter_->getDilithiumPublicKey(), nullptr);
+
+  // ML-DSA-65 (Dilithium3) should have 1952 byte public key
+  ASSERT_EQ(filter_->getDilithiumPublicKeySize(), 1952);
 }

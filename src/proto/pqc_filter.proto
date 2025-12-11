@@ -6,7 +6,7 @@ package envoy.extensions.filters.http.pqc_filter.v3;
 // Follows Envoy extension naming conventions for marketplace compatibility
 // Note: Validation rules removed for headers-only build compatibility
 message PqcFilterConfig {
-    // Post-quantum algorithm to use
+    // Post-quantum algorithm to use (legacy field, kept for compatibility)
     // Supported: "kyber512", "kyber768", "kyber1024", "ml-kem-512", "ml-kem-768", "ml-kem-1024"
     // Required field - validation must be done in C++ code
     string algorithm_name = 1;
@@ -20,4 +20,14 @@ message PqcFilterConfig {
     // Default: 4096 bytes
     // Validation must be done in C++ code
     uint32 max_inspect_bytes = 3;
+
+    // Key Encapsulation Mechanism (KEM) algorithm
+    // Supported: "Kyber512", "Kyber768", "Kyber1024"
+    // Default: "Kyber768" (NIST Level 3)
+    string kem_algorithm = 4;
+
+    // Digital Signature algorithm
+    // Supported: "ML-DSA-44", "ML-DSA-65", "ML-DSA-87" (Dilithium2, 3, 5)
+    // Default: "ML-DSA-65" (NIST Level 3)
+    string sig_algorithm = 5;
 }

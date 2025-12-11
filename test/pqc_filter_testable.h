@@ -29,6 +29,7 @@ class PqcFilter : public Http::StreamDecoderFilter,
 public:
   explicit PqcFilter(std::shared_ptr<PqcFilterConfig> config) : config_(config) {
     initializeKyber();
+    initializeDilithium();
   }
 
   // Http::StreamDecoderFilter interface
@@ -110,6 +111,25 @@ public:
     decoder_callbacks_ = &callbacks;
   }
 
+  // Public key access methods (for key exchange operations)
+  // NOTE: Private keys are intentionally NOT exposed for security reasons
+
+  // Kyber KEM public key access
+  const uint8_t* getKyberPublicKey() const { return kyber_public_key_.get(); }
+  size_t getKyberPublicKeySize() const {
+    return kyber_kem_ ? kyber_kem_->length_public_key : 0;
+  }
+
+  // Dilithium signature public key access
+  const uint8_t* getDilithiumPublicKey() const { return dilithium_public_key_.get(); }
+  size_t getDilithiumPublicKeySize() const {
+    return dilithium_sig_ ? dilithium_sig_->length_public_key : 0;
+  }
+
+  // Status check methods
+  bool hasKyberInitialized() const { return kyber_kem_ != nullptr; }
+  bool hasDilithiumInitialized() const { return dilithium_sig_ != nullptr; }
+
 private:
   std::shared_ptr<PqcFilterConfig> config_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{nullptr};
@@ -119,7 +139,12 @@ private:
   SecureBuffer kyber_public_key_;
   SecureBuffer kyber_secret_key_;
 
-  // Initialization function
+  // Dilithium3 (ML-DSA-65) signature
+  std::unique_ptr<OQS_SIG, decltype(&OQS_SIG_free)> dilithium_sig_{nullptr, OQS_SIG_free};
+  SecureBuffer dilithium_public_key_;
+  SecureBuffer dilithium_secret_key_;
+
+  // Initialization functions
   void initializeKyber() {
     // Simple stub for now - full implementation will be in pqc_filter.cc
     kyber_kem_ = std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)>(
@@ -145,6 +170,33 @@ private:
     }
 
     ENVOY_LOG(info, "Kyber-768 initialized successfully");
+  }
+
+  void initializeDilithium() {
+    // Create Dilithium3 (ML-DSA-65) signature instance
+    dilithium_sig_ = std::unique_ptr<OQS_SIG, decltype(&OQS_SIG_free)>(
+        OQS_SIG_new("ML-DSA-65"), OQS_SIG_free);
+
+    if (!dilithium_sig_) {
+      ENVOY_LOG(error, "Failed to create ML-DSA-65 (Dilithium3) signature instance");
+      return;
+    }
+
+    dilithium_public_key_ = make_secure_buffer(dilithium_sig_->length_public_key);
+    dilithium_secret_key_ = make_secure_buffer(dilithium_sig_->length_secret_key);
+
+    OQS_STATUS status = OQS_SIG_keypair(
+        dilithium_sig_.get(),
+        dilithium_public_key_.get(),
+        dilithium_secret_key_.get()
+    );
+
+    if (status != OQS_SUCCESS) {
+      ENVOY_LOG(error, "Failed to generate ML-DSA-65 (Dilithium3) keypair");
+      return;
+    }
+
+    ENVOY_LOG(info, "ML-DSA-65 (Dilithium3) initialized successfully");
   }
 };
 

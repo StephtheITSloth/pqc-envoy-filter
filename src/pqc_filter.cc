@@ -8,6 +8,7 @@ namespace PqcFilter {
 PqcFilter::PqcFilter(std::shared_ptr<PqcFilterConfig> config)
     : config_(config) {
   initializeKyber();
+  initializeDilithium();
 }
 
 Http::FilterHeadersStatus PqcFilter::decodeHeaders(
@@ -104,14 +105,16 @@ void PqcFilter::setDecoderFilterCallbacks(
 }
 
 void PqcFilter::initializeKyber() {
-  // Create Kyber-768 KEM instance
+  // Create Kyber KEM instance using configured algorithm
   // Note: We use the verbose std::unique_ptr syntax here (not auto) because
   // this is an assignment to an existing member variable declared in the header.
   // The header declares the type, but here we must construct and assign it.
-  kyber_kem_ = std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)>(OQS_KEM_new("Kyber768"), OQS_KEM_free);
+  std::string kem_alg = config_->getKemAlgorithm();
+  kyber_kem_ = std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)>(
+      OQS_KEM_new(kem_alg.c_str()), OQS_KEM_free);
 
   if(!kyber_kem_) {
-    ENVOY_LOG(error, "Failed to create Kyber-768 KEM instance - algorithm not available");
+    ENVOY_LOG(error, "Failed to create KEM instance for algorithm: {} - not available", kem_alg);
     return;
   }
 
@@ -129,11 +132,40 @@ void PqcFilter::initializeKyber() {
     return;
   }
 
-  ENVOY_LOG(info, "Kyber-768 initialized successfully - public_key_size: {} bytes, secret_key_size: {} bytes",
-  kyber_kem_->length_public_key, kyber_kem_->length_secret_key);
-
+  ENVOY_LOG(info, "{} initialized successfully - public_key_size: {} bytes, secret_key_size: {} bytes",
+            kem_alg, kyber_kem_->length_public_key, kyber_kem_->length_secret_key);
 }
 
+void PqcFilter::initializeDilithium() {
+  // Create Dilithium signature instance using configured algorithm
+  // Note: We use the verbose std::unique_ptr syntax here (not auto) because
+  // this is an assignment to an existing member variable declared in the header.
+  std::string sig_alg = config_->getSigAlgorithm();
+  dilithium_sig_ = std::unique_ptr<OQS_SIG, decltype(&OQS_SIG_free)>(
+      OQS_SIG_new(sig_alg.c_str()), OQS_SIG_free);
+
+  if (!dilithium_sig_) {
+    ENVOY_LOG(error, "Failed to create signature instance for algorithm: {} - not available", sig_alg);
+    return;
+  }
+
+  dilithium_public_key_ = make_secure_buffer(dilithium_sig_->length_public_key);
+  dilithium_secret_key_ = make_secure_buffer(dilithium_sig_->length_secret_key);
+
+  OQS_STATUS status = OQS_SIG_keypair(
+      dilithium_sig_.get(),
+      dilithium_public_key_.get(),
+      dilithium_secret_key_.get()
+  );
+
+  if (status != OQS_SUCCESS) {
+    ENVOY_LOG(error, "Failed to generate ML-DSA-65 (Dilithium3) keypair - status: {}", status);
+    return;
+  }
+
+  ENVOY_LOG(info, "{} initialized successfully - public_key_size: {} bytes, secret_key_size: {} bytes",
+            sig_alg, dilithium_sig_->length_public_key, dilithium_sig_->length_secret_key);
+}
 
 } // namespace PqcFilter
 } // namespace HttpFilters
