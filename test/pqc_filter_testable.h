@@ -130,6 +130,62 @@ public:
   bool hasKyberInitialized() const { return kyber_kem_ != nullptr; }
   bool hasDilithiumInitialized() const { return dilithium_sig_ != nullptr; }
 
+  // KEM operations for key exchange
+
+  /**
+   * Simulate client-side KEM encapsulation.
+   *
+   * This method performs the client's role in the key exchange:
+   * 1. Takes the server's public key
+   * 2. Generates a random shared secret
+   * 3. Encapsulates the secret using the public key, producing ciphertext
+   *
+   * @param server_public_key The server's public key (from getKyberPublicKey())
+   * @param server_public_key_len Length of the public key
+   * @param out_ciphertext Output buffer for ciphertext (must be pre-allocated)
+   * @param out_shared_secret Output buffer for shared secret (must be pre-allocated)
+   * @return true if encapsulation succeeded, false otherwise
+   */
+  bool clientEncapsulate(const uint8_t* server_public_key,
+                         size_t server_public_key_len,
+                         uint8_t* out_ciphertext,
+                         uint8_t* out_shared_secret) const {
+    // Validate inputs
+    if (!kyber_kem_) {
+      ENVOY_LOG(error, "KEM not initialized - cannot perform encapsulation");
+      return false;
+    }
+
+    if (!server_public_key || !out_ciphertext || !out_shared_secret) {
+      ENVOY_LOG(error, "Invalid parameters for encapsulation - null pointer");
+      return false;
+    }
+
+    if (server_public_key_len != kyber_kem_->length_public_key) {
+      ENVOY_LOG(error, "Invalid public key length: expected {}, got {}",
+                kyber_kem_->length_public_key, server_public_key_len);
+      return false;
+    }
+
+    // Perform KEM encapsulation (client-side operation)
+    OQS_STATUS status = OQS_KEM_encaps(
+        kyber_kem_.get(),
+        out_ciphertext,      // Output: ciphertext to send to server
+        out_shared_secret,   // Output: shared secret (client's copy)
+        server_public_key    // Input: server's public key
+    );
+
+    if (status != OQS_SUCCESS) {
+      ENVOY_LOG(error, "KEM encapsulation failed - status: {}", status);
+      return false;
+    }
+
+    ENVOY_LOG(debug, "Client encapsulation successful - ciphertext_size: {} bytes, shared_secret_size: {} bytes",
+              kyber_kem_->length_ciphertext, kyber_kem_->length_shared_secret);
+
+    return true;
+  }
+
 private:
   std::shared_ptr<PqcFilterConfig> config_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{nullptr};

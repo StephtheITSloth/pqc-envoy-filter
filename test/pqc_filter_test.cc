@@ -235,3 +235,114 @@ TEST_F(PqcFilterTest, DilithiumInitializationSucceeds) {
   // ML-DSA-65 (Dilithium3) should have 1952 byte public key
   ASSERT_EQ(filter_->getDilithiumPublicKeySize(), 1952);
 }
+
+// ============================================================================
+// KEM ENCAPSULATION TESTS (Client-side key exchange)
+// ============================================================================
+
+// Test 11: Client encapsulation - simulate client generating shared secret
+TEST_F(PqcFilterTest, ClientEncapsulationSucceeds) {
+  // ARRANGE: Get the server's public key
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  size_t public_key_size = filter_->getKyberPublicKeySize();
+
+  ASSERT_NE(server_public_key, nullptr);
+  ASSERT_EQ(public_key_size, 1184);  // Kyber768 public key size
+
+  // Allocate buffers for outputs
+  // Kyber768: ciphertext = 1088 bytes, shared_secret = 32 bytes
+  std::vector<uint8_t> ciphertext(1088);
+  std::vector<uint8_t> shared_secret(32);
+
+  // ACT: Perform client-side encapsulation
+  bool success = filter_->clientEncapsulate(
+      server_public_key,
+      public_key_size,
+      ciphertext.data(),
+      shared_secret.data()
+  );
+
+  // ASSERT: Encapsulation should succeed
+  ASSERT_TRUE(success);
+
+  // Verify outputs are non-zero (contain data)
+  bool ciphertext_has_data = false;
+  for (uint8_t byte : ciphertext) {
+    if (byte != 0) {
+      ciphertext_has_data = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(ciphertext_has_data);
+
+  bool shared_secret_has_data = false;
+  for (uint8_t byte : shared_secret) {
+    if (byte != 0) {
+      shared_secret_has_data = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(shared_secret_has_data);
+}
+
+// Test 12: Client encapsulation with null public key - should fail gracefully
+TEST_F(PqcFilterTest, ClientEncapsulationFailsWithNullPublicKey) {
+  // ARRANGE: Create output buffers
+  std::vector<uint8_t> ciphertext(1088);
+  std::vector<uint8_t> shared_secret(32);
+
+  // ACT: Try to encapsulate with null public key
+  bool success = filter_->clientEncapsulate(
+      nullptr,  // Invalid: null public key
+      1184,
+      ciphertext.data(),
+      shared_secret.data()
+  );
+
+  // ASSERT: Should fail
+  ASSERT_FALSE(success);
+}
+
+// Test 13: Client encapsulation with invalid key length - should fail
+TEST_F(PqcFilterTest, ClientEncapsulationFailsWithInvalidKeyLength) {
+  // ARRANGE: Get server's public key but use wrong length
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  std::vector<uint8_t> ciphertext(1088);
+  std::vector<uint8_t> shared_secret(32);
+
+  // ACT: Try to encapsulate with wrong key length
+  bool success = filter_->clientEncapsulate(
+      server_public_key,
+      999,  // Invalid: wrong length (should be 1184)
+      ciphertext.data(),
+      shared_secret.data()
+  );
+
+  // ASSERT: Should fail
+  ASSERT_FALSE(success);
+}
+
+// Test 14: Client encapsulation with null output buffers - should fail
+TEST_F(PqcFilterTest, ClientEncapsulationFailsWithNullOutputs) {
+  // ARRANGE: Get server's public key
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  size_t public_key_size = filter_->getKyberPublicKeySize();
+
+  // ACT & ASSERT: Try with null ciphertext buffer
+  bool success1 = filter_->clientEncapsulate(
+      server_public_key,
+      public_key_size,
+      nullptr,  // Invalid: null ciphertext
+      new uint8_t[32]
+  );
+  ASSERT_FALSE(success1);
+
+  // ACT & ASSERT: Try with null shared secret buffer
+  bool success2 = filter_->clientEncapsulate(
+      server_public_key,
+      public_key_size,
+      new uint8_t[1088],
+      nullptr  // Invalid: null shared secret
+  );
+  ASSERT_FALSE(success2);
+}

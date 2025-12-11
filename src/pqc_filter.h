@@ -48,6 +48,27 @@ public:
   bool hasKyberInitialized() const { return kyber_kem_ != nullptr; }
   bool hasDilithiumInitialized() const { return dilithium_sig_ != nullptr; }
 
+  // KEM operations for key exchange
+
+  /**
+   * Simulate client-side KEM encapsulation.
+   *
+   * This method performs the client's role in the key exchange:
+   * 1. Takes the server's public key
+   * 2. Generates a random shared secret
+   * 3. Encapsulates the secret using the public key, producing ciphertext
+   *
+   * @param server_public_key The server's public key (from getKyberPublicKey())
+   * @param server_public_key_len Length of the public key
+   * @param out_ciphertext Output buffer for ciphertext (must be pre-allocated)
+   * @param out_shared_secret Output buffer for shared secret (must be pre-allocated)
+   * @return true if encapsulation succeeded, false otherwise
+   */
+  bool clientEncapsulate(const uint8_t* server_public_key,
+                         size_t server_public_key_len,
+                         uint8_t* out_ciphertext,
+                         uint8_t* out_shared_secret) const;
+
 private:
   std::shared_ptr<PqcFilterConfig> config_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{nullptr};

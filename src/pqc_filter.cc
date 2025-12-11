@@ -167,6 +167,49 @@ void PqcFilter::initializeDilithium() {
             sig_alg, dilithium_sig_->length_public_key, dilithium_sig_->length_secret_key);
 }
 
+bool PqcFilter::clientEncapsulate(const uint8_t* server_public_key,
+                                   size_t server_public_key_len,
+                                   uint8_t* out_ciphertext,
+                                   uint8_t* out_shared_secret) const {
+  // Validate inputs
+  if (!kyber_kem_) {
+    ENVOY_LOG(error, "KEM not initialized - cannot perform encapsulation");
+    return false;
+  }
+
+  if (!server_public_key || !out_ciphertext || !out_shared_secret) {
+    ENVOY_LOG(error, "Invalid parameters for encapsulation - null pointer");
+    return false;
+  }
+
+  if (server_public_key_len != kyber_kem_->length_public_key) {
+    ENVOY_LOG(error, "Invalid public key length: expected {}, got {}",
+              kyber_kem_->length_public_key, server_public_key_len);
+    return false;
+  }
+
+  // Perform KEM encapsulation (client-side operation)
+  // This generates:
+  // 1. A random shared secret (same on both sides after decapsulation)
+  // 2. Ciphertext that encapsulates the secret (sent to server)
+  OQS_STATUS status = OQS_KEM_encaps(
+      kyber_kem_.get(),
+      out_ciphertext,      // Output: ciphertext to send to server
+      out_shared_secret,   // Output: shared secret (client's copy)
+      server_public_key    // Input: server's public key
+  );
+
+  if (status != OQS_SUCCESS) {
+    ENVOY_LOG(error, "KEM encapsulation failed - status: {}", status);
+    return false;
+  }
+
+  ENVOY_LOG(debug, "Client encapsulation successful - ciphertext_size: {} bytes, shared_secret_size: {} bytes",
+            kyber_kem_->length_ciphertext, kyber_kem_->length_shared_secret);
+
+  return true;
+}
+
 } // namespace PqcFilter
 } // namespace HttpFilters
 } // namespace Extensions
