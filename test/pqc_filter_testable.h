@@ -10,10 +10,16 @@
 // Now include the actual filter implementation
 // It will use our mocked types above
 #include "src/pqc_filter_config.h"
+#include "src/base64_utils.h"
 
 // Post-Quantum Cryptography includes
 #include <oqs/oqs.h>
 #include "src/pqc_crypto_utils.h"
+
+// OpenSSL includes for AES-256-GCM
+#include <openssl/evp.h>
+#include <openssl/err.h>
+#include <openssl/rand.h>
 
 namespace Envoy {
 namespace Extensions {
@@ -24,7 +30,7 @@ namespace PqcFilter {
  * Testable version of PqcFilter
  * Uses mock Envoy interfaces for unit testing
  */
-class PqcFilter : public Http::StreamDecoderFilter,
+class PqcFilter : public Http::StreamFilter,
                   public Logger::Loggable<Logger::Id::filter> {
 public:
   explicit PqcFilter(std::shared_ptr<PqcFilterConfig> config) : config_(config) {
@@ -32,11 +38,56 @@ public:
     initializeDilithium();
   }
 
-  // Http::StreamDecoderFilter interface
+  // Http::StreamDecoderFilter interface (Request processing)
   Http::FilterHeadersStatus decodeHeaders(Http::RequestHeaderMap& headers,
                                           bool end_stream) {
     ENVOY_LOG(info, "PQC Filter using algorithm: {}",
               config_->getAlgorithmName());
+
+    // Check for X-PQC-Init header to detect client PQC request
+    auto pqc_init_header = headers.get(Http::LowerCaseString("x-pqc-init"));
+    if (!pqc_init_header.empty()) {
+      const auto& value = pqc_init_header[0]->value().getStringView();
+      if (value == "true") {
+        client_requested_pqc_ = true;
+        ENVOY_LOG(info, "Client requested PQC key exchange - will send public key in response");
+      }
+    }
+
+    // Check for X-PQC-Ciphertext header (client sending ciphertext for decapsulation)
+    auto ciphertext_header = headers.get(Http::LowerCaseString("x-pqc-ciphertext"));
+    if (!ciphertext_header.empty()) {
+      const auto& encoded_ciphertext = ciphertext_header[0]->value().getStringView();
+
+      // Base64-decode the ciphertext
+      std::vector<uint8_t> ciphertext = Base64Utils::decode(encoded_ciphertext);
+
+      if (ciphertext.empty()) {
+        ENVOY_LOG(error, "Failed to decode base64 ciphertext from X-PQC-Ciphertext header");
+        return Http::FilterHeadersStatus::Continue;
+      }
+
+      // Allocate buffer for shared secret
+      if (!shared_secret_) {
+        shared_secret_ = make_secure_buffer(kyber_kem_->length_shared_secret);
+      }
+
+      // Server decapsulates ciphertext to recover shared secret
+      bool success = serverDecapsulate(
+          ciphertext.data(),
+          ciphertext.size(),
+          shared_secret_.get()
+      );
+
+      if (success) {
+        has_shared_secret_ = true;
+        ENVOY_LOG(info, "Successfully decapsulated ciphertext and established shared secret");
+      } else {
+        ENVOY_LOG(error, "Failed to decapsulate ciphertext from client");
+        has_shared_secret_ = false;
+      }
+    }
+
     return Http::FilterHeadersStatus::Continue;
   }
 
@@ -111,6 +162,45 @@ public:
     decoder_callbacks_ = &callbacks;
   }
 
+  // Http::StreamEncoderFilter interface (Response processing)
+  Http::FilterHeadersStatus encodeHeaders(Http::ResponseHeaderMap& headers,
+                                          bool end_stream) {
+    // If client requested PQC, inject public key in response
+    if (client_requested_pqc_) {
+      // Base64-encode the Kyber768 public key (1184 bytes → ~1580 chars)
+      std::string encoded_public_key = base64Encode(
+          kyber_public_key_.get(),
+          kyber_kem_->length_public_key
+      );
+
+      // Add X-PQC-Public-Key header
+      headers.addCopy(Http::LowerCaseString("x-pqc-public-key"), encoded_public_key);
+
+      // Add X-PQC-Status header
+      headers.addCopy(Http::LowerCaseString("x-pqc-status"), "pending");
+
+      ENVOY_LOG(info, "Injected PQC public key in response headers ({} bytes base64-encoded)",
+                encoded_public_key.size());
+
+      client_requested_pqc_ = false;  // Reset flag
+    }
+
+    return Http::FilterHeadersStatus::Continue;
+  }
+
+  Http::FilterDataStatus encodeData(Buffer::Instance& data,
+                                    bool end_stream) {
+    return Http::FilterDataStatus::Continue;
+  }
+
+  Http::FilterTrailersStatus encodeTrailers(Http::ResponseTrailerMap& trailers) {
+    return Http::FilterTrailersStatus::Continue;
+  }
+
+  void setEncoderFilterCallbacks(Http::StreamEncoderFilterCallbacks& callbacks) {
+    encoder_callbacks_ = &callbacks;
+  }
+
   // Public key access methods (for key exchange operations)
   // NOTE: Private keys are intentionally NOT exposed for security reasons
 
@@ -129,6 +219,14 @@ public:
   // Status check methods
   bool hasKyberInitialized() const { return kyber_kem_ != nullptr; }
   bool hasDilithiumInitialized() const { return dilithium_sig_ != nullptr; }
+
+  // Shared secret access (established after server decapsulation)
+  const uint8_t* getSharedSecret() const {
+    return has_shared_secret_ ? shared_secret_.get() : nullptr;
+  }
+  size_t getSharedSecretSize() const {
+    return has_shared_secret_ && kyber_kem_ ? kyber_kem_->length_shared_secret : 0;
+  }
 
   // KEM operations for key exchange
 
@@ -243,14 +341,261 @@ public:
     return true;
   }
 
+  /**
+   * AES-256-GCM Encryption (Client-side operation)
+   *
+   * Encrypts plaintext using the shared secret derived from Kyber768 key exchange.
+   * Uses AES-256-GCM (Galois/Counter Mode) for authenticated encryption.
+   *
+   * @param plaintext The data to encrypt
+   * @param plaintext_len Length of plaintext in bytes
+   * @param key The 32-byte encryption key (shared secret from Kyber768)
+   * @param iv The 12-byte initialization vector (must be unique per encryption)
+   * @param ciphertext Output vector for encrypted data
+   * @param auth_tag Output buffer for 16-byte authentication tag
+   * @return true if encryption succeeded, false otherwise
+   */
+  bool encryptAES256GCM(const uint8_t* plaintext,
+                        size_t plaintext_len,
+                        const uint8_t* key,
+                        uint8_t* iv,
+                        std::vector<uint8_t>& ciphertext,
+                        uint8_t* auth_tag) const {
+    // Validate inputs
+    if (!plaintext || !key || !iv || !auth_tag) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: null pointer parameter");
+      return false;
+    }
+
+    if (plaintext_len == 0) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: empty plaintext");
+      return false;
+    }
+
+    // Generate cryptographically secure random IV (12 bytes for GCM mode)
+    // Uses OpenSSL RAND_bytes for FIPS-compliant random number generation
+    if (RAND_bytes(iv, 12) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: failed to generate secure random IV");
+      return false;
+    }
+
+    // Allocate ciphertext buffer (same size as plaintext for GCM)
+    ciphertext.resize(plaintext_len);
+
+    // Initialize OpenSSL EVP context
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: failed to create EVP context");
+      return false;
+    }
+
+    // Initialize encryption operation with AES-256-GCM
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: failed to initialize cipher");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+
+    // Set IV length (12 bytes is standard for GCM)
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: failed to set IV length");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+
+    // Initialize key and IV
+    if (EVP_EncryptInit_ex(ctx, nullptr, nullptr, key, iv) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: failed to set key and IV");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+
+    // Encrypt plaintext
+    int len = 0;
+    if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len, plaintext, plaintext_len) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: encryption failed");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+    int ciphertext_len = len;
+
+    // Finalize encryption
+    if (EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: finalization failed");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+    ciphertext_len += len;
+
+    // Get authentication tag (16 bytes)
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, auth_tag) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM encrypt: failed to get authentication tag");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+
+    // Clean up
+    EVP_CIPHER_CTX_free(ctx);
+
+    ENVOY_LOG(debug, "AES-256-GCM encryption successful - plaintext: {} bytes, ciphertext: {} bytes",
+              plaintext_len, ciphertext_len);
+
+    return true;
+  }
+
+  /**
+   * AES-256-GCM Decryption (Server-side operation)
+   *
+   * Decrypts ciphertext using the shared secret derived from Kyber768 key exchange.
+   * Verifies the authentication tag to detect tampering.
+   *
+   * @param ciphertext The encrypted data
+   * @param ciphertext_len Length of ciphertext in bytes
+   * @param key The 32-byte decryption key (shared secret from Kyber768)
+   * @param iv The 12-byte initialization vector (from encryption)
+   * @param auth_tag The 16-byte authentication tag (from encryption)
+   * @param plaintext Output vector for decrypted data
+   * @return true if decryption succeeded and tag verified, false otherwise
+   */
+  bool decryptAES256GCM(const uint8_t* ciphertext,
+                        size_t ciphertext_len,
+                        const uint8_t* key,
+                        const uint8_t* iv,
+                        const uint8_t* auth_tag,
+                        std::vector<uint8_t>& plaintext) const {
+    // Validate inputs
+    if (!ciphertext || !key || !iv || !auth_tag) {
+      ENVOY_LOG(error, "AES-256-GCM decrypt: null pointer parameter");
+      return false;
+    }
+
+    if (ciphertext_len == 0) {
+      ENVOY_LOG(error, "AES-256-GCM decrypt: empty ciphertext");
+      return false;
+    }
+
+    // Allocate plaintext buffer (same size as ciphertext for GCM)
+    plaintext.resize(ciphertext_len);
+
+    // Initialize OpenSSL EVP context
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+      ENVOY_LOG(error, "AES-256-GCM decrypt: failed to create EVP context");
+      return false;
+    }
+
+    // Initialize decryption operation with AES-256-GCM
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM decrypt: failed to initialize cipher");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+
+    // Set IV length (12 bytes)
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM decrypt: failed to set IV length");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+
+    // Initialize key and IV
+    if (EVP_DecryptInit_ex(ctx, nullptr, nullptr, key, iv) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM decrypt: failed to set key and IV");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+
+    // Decrypt ciphertext
+    int len = 0;
+    if (EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext, ciphertext_len) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM decrypt: decryption failed");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+    int plaintext_len = len;
+
+    // Set expected authentication tag
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, const_cast<uint8_t*>(auth_tag)) != 1) {
+      ENVOY_LOG(error, "AES-256-GCM decrypt: failed to set authentication tag");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+
+    // Finalize decryption and verify authentication tag
+    int ret = EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len);
+    if (ret != 1) {
+      ENVOY_LOG(error, "AES-256-GCM decrypt: finalization failed - authentication tag mismatch (tampering detected)");
+      EVP_CIPHER_CTX_free(ctx);
+      return false;
+    }
+    plaintext_len += len;
+
+    // Resize plaintext to actual size
+    plaintext.resize(plaintext_len);
+
+    // Clean up
+    EVP_CIPHER_CTX_free(ctx);
+
+    ENVOY_LOG(debug, "AES-256-GCM decryption successful - ciphertext: {} bytes, plaintext: {} bytes",
+              ciphertext_len, plaintext_len);
+
+    return true;
+  }
+
 private:
   std::shared_ptr<PqcFilterConfig> config_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{nullptr};
+  Http::StreamEncoderFilterCallbacks* encoder_callbacks_{nullptr};
+
+  // HTTP header key exchange state
+  bool client_requested_pqc_{false};  // Track if client sent X-PQC-Init header
+
+  // Base64 encoding helper
+  static std::string base64Encode(const uint8_t* data, size_t len) {
+    static constexpr const char* BASE64_CHARS =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    std::string encoded;
+    encoded.reserve(((len + 2) / 3) * 4);
+
+    for (size_t i = 0; i < len; i += 3) {
+      uint32_t triple = (data[i] << 16);
+
+      if (i + 1 < len) {
+        triple |= (data[i + 1] << 8);
+      }
+      if (i + 2 < len) {
+        triple |= data[i + 2];
+      }
+
+      encoded.push_back(BASE64_CHARS[(triple >> 18) & 0x3F]);
+      encoded.push_back(BASE64_CHARS[(triple >> 12) & 0x3F]);
+
+      if (i + 1 < len) {
+        encoded.push_back(BASE64_CHARS[(triple >> 6) & 0x3F]);
+      } else {
+        encoded.push_back('=');
+      }
+
+      if (i + 2 < len) {
+        encoded.push_back(BASE64_CHARS[triple & 0x3F]);
+      } else {
+        encoded.push_back('=');
+      }
+    }
+
+    return encoded;
+  }
 
   // Post-Quantum Cryptography - Kyber-768
   std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)> kyber_kem_{nullptr, OQS_KEM_free};
   SecureBuffer kyber_public_key_;
   SecureBuffer kyber_secret_key_;
+
+  // Shared secret storage (32 bytes for Kyber768)
+  // This is populated when server receives ciphertext from client
+  SecureBuffer shared_secret_;
+  bool has_shared_secret_{false};  // Track if shared secret has been established
 
   // Dilithium3 (ML-DSA-65) signature
   std::unique_ptr<OQS_SIG, decltype(&OQS_SIG_free)> dilithium_sig_{nullptr, OQS_SIG_free};

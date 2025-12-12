@@ -1,4 +1,10 @@
-# Stage 1: The Build Stage
+# Multi-stage Dockerfile for PQC Envoy Filter
+# Production-ready build with TDD verification
+# Architecture: Build filter .so → Load into official Envoy binary
+
+# ============================================================================
+# STAGE 1: Build the PQC filter using Bazel
+# ============================================================================
 FROM envoyproxy/envoy-build-ubuntu:latest AS builder
 
 # Install build-time dependencies for PQC support
@@ -13,12 +19,47 @@ RUN cd /tmp && \
 COPY . /workspace
 WORKDIR /workspace
 
-# TDD step: build and run tests first
-RUN bazel build //test/...
+# TDD: Run all tests to verify filter correctness
+RUN bazel test //test:pqc_filter_test --test_output=errors
 
-# RUN bazel test //test/... 
+# Build the PQC filter as a shared library (.so)
+# This creates a loadable module for Envoy
+RUN bazel build //src:pqc_filter.so --verbose_failures
 
-# Stage 2: The Final Runtime Stage (Minimal)
-# FROM ubuntu:20.04  # Will be finalized later, but shows the concept
-# COPY --from=builder /path/to/compiled/envoy_binary /usr/local/bin/envoy 
-# CMD ["/usr/local/bin/envoy", "-c", "envoy.yaml"]
+# Extract the built .so file
+RUN mkdir -p /output && \
+    cp bazel-bin/src/pqc_filter.so /output/pqc_filter.so && \
+    ls -lh /output/pqc_filter.so
+
+# ============================================================================
+# STAGE 2: Runtime with official Envoy v1.28.0
+# ============================================================================
+FROM envoyproxy/envoy:v1.28.0
+
+# Install OpenSSL runtime libraries (needed for AES-256-GCM)
+USER root
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the compiled PQC filter from builder stage
+COPY --from=builder /output/pqc_filter.so /etc/envoy/filters/pqc_filter.so
+
+# Copy Envoy configuration
+COPY envoy.yaml /etc/envoy/envoy.yaml
+
+# Expose ports
+# 10000: Main HTTP listener (with PQC filter)
+# 9901: Admin interface
+EXPOSE 10000 9901
+
+# Set LD_LIBRARY_PATH to ensure filter dependencies are found
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu
+
+# Health check on admin endpoint
+HEALTHCHECK --interval=30s --timeout=3s \
+  CMD curl -f http://localhost:9901/ready || exit 1
+
+# Run Envoy with our configuration
+# Debug logging enabled to see PQC filter in action
+CMD ["/usr/local/bin/envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]

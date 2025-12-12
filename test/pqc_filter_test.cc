@@ -4,6 +4,7 @@
 #include "gtest/gtest.h"
 #include "test/pqc_filter_testable.h"  // Uses mock Envoy interfaces
 #include "src/pqc_filter_config.h"
+#include "src/base64_utils.h"  // Base64 encoding/decoding for HTTP headers
 
 using namespace Envoy::Extensions::HttpFilters::PqcFilter;
 using namespace Envoy::Buffer;
@@ -508,4 +509,267 @@ TEST_F(PqcFilterTest, FullKeyExchangeProducesIdenticalSharedSecrets) {
     }
   }
   ASSERT_TRUE(has_nonzero) << "Shared secret should not be all zeros";
+}
+
+// ============================================================================
+// HTTP HEADER KEY EXCHANGE TESTS (Application-Layer PQC)
+// ============================================================================
+
+// Test 20: Server advertises public key when client requests PQC
+TEST_F(PqcFilterTest, ServerAdvertisesPublicKeyInResponseHeader) {
+  // ARRANGE: Create request with PQC initialization header
+  RequestHeaderMap request_headers;
+  request_headers.addCopy(LowerCaseString("x-pqc-init"), "true");
+
+  // ACT: Filter processes the request headers
+  FilterHeadersStatus status = filter_->decodeHeaders(request_headers, false);
+
+  // ASSERT: Filter should continue processing
+  ASSERT_EQ(status, FilterHeadersStatus::Continue);
+
+  // ACT (Part 2): Filter processes response headers
+  ResponseHeaderMap response_headers;
+  FilterHeadersStatus response_status = filter_->encodeHeaders(response_headers, false);
+
+  // ASSERT: Filter should continue processing responses
+  ASSERT_EQ(response_status, FilterHeadersStatus::Continue);
+
+  // ASSERT: Response should contain X-PQC-Public-Key header
+  auto public_key_header = response_headers.get(LowerCaseString("x-pqc-public-key"));
+  ASSERT_FALSE(public_key_header.empty());
+
+  // ASSERT: Public key should be base64-encoded (1184 bytes → ~1580 chars)
+  const auto& encoded_key = public_key_header[0]->value().getStringView();
+  ASSERT_GT(encoded_key.size(), 1500);  // Should be around 1580 characters
+  ASSERT_LT(encoded_key.size(), 1650);
+
+  // ASSERT: Response should contain X-PQC-Status header
+  auto status_header = response_headers.get(LowerCaseString("x-pqc-status"));
+  ASSERT_FALSE(status_header.empty());
+  ASSERT_EQ(status_header[0]->value().getStringView(), "pending");
+}
+
+// Test 21: Client sends ciphertext and server decapsulates to derive shared secret
+TEST_F(PqcFilterTest, ClientSendsCiphertextAndServerDecapsulates) {
+  // ARRANGE: Simulate full key exchange flow
+
+  // Step 1: Client gets server's public key (from Test 20 flow)
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  size_t pk_len = filter_->getKyberPublicKeySize();
+
+  // Step 2: Client performs encapsulation
+  std::vector<uint8_t> ciphertext(1088);  // Kyber768 ciphertext size
+  std::vector<uint8_t> client_shared_secret(32);
+
+  bool encap_success = filter_->clientEncapsulate(
+      server_public_key,
+      pk_len,
+      ciphertext.data(),
+      client_shared_secret.data()
+  );
+  ASSERT_TRUE(encap_success);
+
+  // Step 3: Client base64-encodes ciphertext for HTTP header transmission
+  std::string encoded_ciphertext = Base64Utils::encode(ciphertext.data(), ciphertext.size());
+
+  // Step 4: Client sends ciphertext in X-PQC-Ciphertext header
+  RequestHeaderMap request_headers;
+  request_headers.addCopy(LowerCaseString("x-pqc-ciphertext"), encoded_ciphertext);
+
+  // ACT: Filter processes request with ciphertext
+  FilterHeadersStatus status = filter_->decodeHeaders(request_headers, false);
+
+  // ASSERT: Filter should continue processing
+  ASSERT_EQ(status, FilterHeadersStatus::Continue);
+
+  // ASSERT: Server should have decapsulated and stored the shared secret
+  // We verify this by calling getSharedSecret() method
+  const uint8_t* server_shared_secret = filter_->getSharedSecret();
+  ASSERT_NE(server_shared_secret, nullptr) << "Server should have stored shared secret after decapsulation";
+
+  // ASSERT: Server's shared secret should match client's shared secret
+  size_t secret_len = filter_->getSharedSecretSize();
+  ASSERT_EQ(secret_len, 32) << "Shared secret should be 32 bytes for Kyber768";
+
+  // Verify byte-by-byte match
+  for (size_t i = 0; i < 32; i++) {
+    ASSERT_EQ(server_shared_secret[i], client_shared_secret[i])
+        << "Shared secret mismatch at byte " << i;
+  }
+}
+
+// ============================================================================
+// AES-256-GCM ENCRYPTION TESTS (Quantum-Resistant Data Protection)
+// ============================================================================
+
+// Test 22: Encrypt plaintext with AES-256-GCM, decrypt on server, verify match
+TEST_F(PqcFilterTest, EncryptAndDecryptWithAES256GCM) {
+  // ARRANGE: Establish shared secret first (from Test 21)
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  size_t pk_len = filter_->getKyberPublicKeySize();
+
+  std::vector<uint8_t> ciphertext(1088);
+  std::vector<uint8_t> client_shared_secret(32);
+
+  bool encap_success = filter_->clientEncapsulate(
+      server_public_key,
+      pk_len,
+      ciphertext.data(),
+      client_shared_secret.data()
+  );
+  ASSERT_TRUE(encap_success);
+
+  // Server receives and decapsulates
+  std::string encoded_ciphertext = Base64Utils::encode(ciphertext.data(), ciphertext.size());
+  RequestHeaderMap request_headers;
+  request_headers.addCopy(LowerCaseString("x-pqc-ciphertext"), encoded_ciphertext);
+  filter_->decodeHeaders(request_headers, false);
+
+  // Verify shared secret established
+  const uint8_t* server_shared_secret = filter_->getSharedSecret();
+  ASSERT_NE(server_shared_secret, nullptr);
+
+  // ARRANGE: Plaintext message to encrypt
+  std::string plaintext = "This is a secret message protected by post-quantum cryptography!";
+  std::vector<uint8_t> plaintext_bytes(plaintext.begin(), plaintext.end());
+
+  // ACT: Client encrypts the message using AES-256-GCM
+  std::vector<uint8_t> encrypted_data;
+  std::vector<uint8_t> iv(12);  // 12-byte IV for GCM mode
+  std::vector<uint8_t> auth_tag(16);  // 16-byte authentication tag
+
+  bool encrypt_success = filter_->encryptAES256GCM(
+      plaintext_bytes.data(),
+      plaintext_bytes.size(),
+      client_shared_secret.data(),
+      iv.data(),
+      encrypted_data,
+      auth_tag.data()
+  );
+  ASSERT_TRUE(encrypt_success) << "Encryption should succeed";
+  ASSERT_EQ(encrypted_data.size(), plaintext_bytes.size()) << "Ciphertext size should match plaintext size";
+
+  // ACT: Server decrypts using the same shared secret
+  std::vector<uint8_t> decrypted_data;
+  bool decrypt_success = filter_->decryptAES256GCM(
+      encrypted_data.data(),
+      encrypted_data.size(),
+      server_shared_secret,
+      iv.data(),
+      auth_tag.data(),
+      decrypted_data
+  );
+  ASSERT_TRUE(decrypt_success) << "Decryption should succeed";
+
+  // ASSERT: Decrypted data matches original plaintext
+  ASSERT_EQ(decrypted_data.size(), plaintext_bytes.size())
+      << "Decrypted size should match original plaintext size";
+
+  for (size_t i = 0; i < plaintext_bytes.size(); i++) {
+    ASSERT_EQ(decrypted_data[i], plaintext_bytes[i])
+        << "Decrypted data mismatch at byte " << i;
+  }
+
+  // ASSERT: Verify authentication tag prevents tampering
+  std::vector<uint8_t> tampered_data = encrypted_data;
+  tampered_data[0] ^= 0x01;  // Flip one bit
+
+  std::vector<uint8_t> tampered_decrypt;
+  bool tampered_decrypt_success = filter_->decryptAES256GCM(
+      tampered_data.data(),
+      tampered_data.size(),
+      server_shared_secret,
+      iv.data(),
+      auth_tag.data(),
+      tampered_decrypt
+  );
+  ASSERT_FALSE(tampered_decrypt_success)
+      << "Decryption should fail for tampered data (authentication tag mismatch)";
+}
+
+// Test 23: Verify secure random IV generation for AES-256-GCM
+TEST_F(PqcFilterTest, SecureRandomIVGeneration) {
+  // ARRANGE: Establish shared secret first (from Test 21)
+  const uint8_t* server_public_key = filter_->getKyberPublicKey();
+  size_t pk_len = filter_->getKyberPublicKeySize();
+
+  std::vector<uint8_t> ciphertext(1088);
+  std::vector<uint8_t> client_shared_secret(32);
+
+  bool encap_success = filter_->clientEncapsulate(
+      server_public_key, pk_len, ciphertext.data(), client_shared_secret.data());
+  ASSERT_TRUE(encap_success);
+
+  // Server receives and decapsulates
+  std::string encoded_ciphertext = Base64Utils::encode(ciphertext.data(), ciphertext.size());
+  RequestHeaderMap request_headers;
+  request_headers.addCopy(LowerCaseString("x-pqc-ciphertext"), encoded_ciphertext);
+  filter_->decodeHeaders(request_headers, false);
+
+  const uint8_t* server_shared_secret = filter_->getSharedSecret();
+  ASSERT_NE(server_shared_secret, nullptr);
+
+  // ARRANGE: Use the same plaintext for multiple encryptions
+  std::string plaintext = "Test message for IV uniqueness verification";
+  std::vector<uint8_t> plaintext_bytes(plaintext.begin(), plaintext.end());
+
+  // ACT: Perform multiple encryptions with the same plaintext and key
+  const int num_encryptions = 10;
+  std::vector<std::vector<uint8_t>> ivs(num_encryptions, std::vector<uint8_t>(12));
+  std::vector<std::vector<uint8_t>> ciphertexts(num_encryptions);
+  std::vector<std::vector<uint8_t>> auth_tags(num_encryptions, std::vector<uint8_t>(16));
+
+  for (int i = 0; i < num_encryptions; i++) {
+    bool encrypt_success = filter_->encryptAES256GCM(
+        plaintext_bytes.data(), plaintext_bytes.size(),
+        client_shared_secret.data(), ivs[i].data(), ciphertexts[i], auth_tags[i].data());
+    ASSERT_TRUE(encrypt_success) << "Encryption " << i << " should succeed";
+  }
+
+  // ASSERT: Verify all IVs are unique (probability of collision with secure random is negligible)
+  for (int i = 0; i < num_encryptions; i++) {
+    for (int j = i + 1; j < num_encryptions; j++) {
+      bool ivs_are_different = false;
+      for (int k = 0; k < 12; k++) {
+        if (ivs[i][k] != ivs[j][k]) {
+          ivs_are_different = true;
+          break;
+        }
+      }
+      ASSERT_TRUE(ivs_are_different)
+          << "IV " << i << " and IV " << j << " should be different (secure random generation)";
+    }
+  }
+
+  // ASSERT: Verify different IVs produce different ciphertexts (even with same plaintext/key)
+  for (int i = 0; i < num_encryptions; i++) {
+    for (int j = i + 1; j < num_encryptions; j++) {
+      bool ciphertexts_are_different = false;
+      for (size_t k = 0; k < ciphertexts[i].size() && k < ciphertexts[j].size(); k++) {
+        if (ciphertexts[i][k] != ciphertexts[j][k]) {
+          ciphertexts_are_different = true;
+          break;
+        }
+      }
+      ASSERT_TRUE(ciphertexts_are_different)
+          << "Ciphertext " << i << " and ciphertext " << j
+          << " should be different due to different IVs";
+    }
+  }
+
+  // ASSERT: Verify each ciphertext can still be decrypted correctly with its corresponding IV
+  for (int i = 0; i < num_encryptions; i++) {
+    std::vector<uint8_t> decrypted_data;
+    bool decrypt_success = filter_->decryptAES256GCM(
+        ciphertexts[i].data(), ciphertexts[i].size(),
+        server_shared_secret, ivs[i].data(), auth_tags[i].data(), decrypted_data);
+    ASSERT_TRUE(decrypt_success) << "Decryption " << i << " should succeed";
+
+    // Verify decrypted data matches original plaintext
+    ASSERT_EQ(decrypted_data.size(), plaintext_bytes.size());
+    for (size_t k = 0; k < plaintext_bytes.size(); k++) {
+      ASSERT_EQ(decrypted_data[k], plaintext_bytes[k])
+          << "Decryption " << i << " should match original plaintext at byte " << k;
+    }
+  }
 }

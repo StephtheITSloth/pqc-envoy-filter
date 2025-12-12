@@ -87,6 +87,36 @@ http_archive(
 )
 
 # ============================================================================
+# Envoy - Service Proxy (Headers for compilation)
+# ============================================================================
+# We use Envoy v1.28.0 for compatibility with existing deployments
+# Note: This is a LARGE download (~500MB) but only needed for headers at build time
+# The actual Envoy binary comes from the official Docker image at runtime
+
+http_archive(
+    name = "envoy",
+    sha256 = "c5628b609ef9e5fafe872b8828089a189bfbffb6e261b8c4d34eff4c65229a3f",
+    strip_prefix = "envoy-1.28.0",
+    urls = ["https://github.com/envoyproxy/envoy/archive/v1.28.0.tar.gz"],
+)
+
+# Load Envoy dependencies
+load("@envoy//bazel:api_binding.bzl", "envoy_api_binding")
+envoy_api_binding()
+
+load("@envoy//bazel:api_repositories.bzl", "envoy_api_dependencies")
+envoy_api_dependencies()
+
+load("@envoy//bazel:repositories.bzl", "envoy_dependencies")
+envoy_dependencies()
+
+load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
+envoy_dependencies_extra()
+
+load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
+envoy_dependency_imports()
+
+# ============================================================================
 # Production Strategy: Headers-Only + Runtime Linking
 # ============================================================================
 #

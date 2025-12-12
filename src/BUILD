@@ -49,15 +49,27 @@ cc_library(
 # ============================================================================
 
 cc_library(
+    name = "base64_utils_lib",
+    srcs = ["base64_utils.cc"],
+    hdrs = ["base64_utils.h"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "pqc_filter_lib",
     srcs = ["pqc_filter.cc"],
     hdrs = [
         "pqc_filter.h",
         "pqc_crypto_utils.h",  # Secure memory utilities
     ],
+    linkopts = [
+        "-lcrypto",  # OpenSSL libcrypto for AES-256-GCM
+        "-lssl",     # OpenSSL libssl
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":pqc_filter_config_lib",
+        ":base64_utils_lib",  # Base64 encoding for HTTP headers
 
         # Post-Quantum Cryptography library
         # TODO(optimization): Current build is ~15MB (includes SLH-DSA/SPHINCS+)
@@ -69,5 +81,22 @@ cc_library(
         "@envoy//include/envoy/http:filter_interface",
         "@envoy//source/common/buffer:buffer_lib",
         "@envoy//source/common/common:logger_lib",
+    ],
+)
+
+# ============================================================================
+# Shared Library (.so) for Envoy Dynamic Loading
+# ============================================================================
+# This builds a .so file that can be loaded by Envoy at runtime
+# Usage: bazel build //src:pqc_filter.so
+
+cc_binary(
+    name = "pqc_filter.so",
+    linkshared = True,
+    linkstatic = False,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":pqc_filter_lib",
+        ":pqc_filter_factory_lib",
     ],
 )

@@ -1,0 +1,28 @@
+# Docker Compose for PQC Envoy Filter Demo
+# Quick start: docker-compose up --build
+
+version: '3.8'
+
+services:
+  # Envoy proxy with PQC filter
+  envoy-pqc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: envoy-pqc
+    ports:
+      - "10000:10000"  # Main HTTP listener with PQC filter
+      - "9901:9901"    # Admin interface
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    networks:
+      - pqc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9901/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+networks:
+  pqc-network:
+    driver: bridge

@@ -32,25 +32,76 @@ enum class FilterTrailersStatus {
   StopIteration = 1,
 };
 
-// Mock HTTP header map
-class RequestHeaderMap {
+// Mock LowerCaseString (for header keys)
+class LowerCaseString {
 public:
-  void addCopy(const std::string& key, const std::string& value) {
-    headers_[key] = value;
-  }
-
-  const std::string& get(const std::string& key) const {
-    static const std::string empty;
-    auto it = headers_.find(key);
-    return (it != headers_.end()) ? it->second : empty;
-  }
-
+  explicit LowerCaseString(const std::string& str) : value_(str) {}
+  const std::string& get() const { return value_; }
+  operator const std::string&() const { return value_; }
 private:
-  std::map<std::string, std::string> headers_;
+  std::string value_;
 };
 
-// Mock HTTP trailer map
+// Mock header value wrapper
+class HeaderString {
+public:
+  HeaderString(const std::string& str) : value_(str) {}
+  const std::string& getStringView() const { return value_; }
+private:
+  std::string value_;
+};
+
+// Mock header entry
+class HeaderEntry {
+public:
+  HeaderEntry(const std::string& key, const std::string& val)
+      : key_(key), value_(val) {}
+  const HeaderString& value() const { return value_; }
+  const std::string& key() const { return key_; }
+private:
+  std::string key_;
+  HeaderString value_;
+};
+
+// Mock HTTP header map (base class for request and response headers)
+class HeaderMap {
+public:
+  void addCopy(const LowerCaseString& key, const std::string& value) {
+    headers_[key.get()] = value;
+  }
+
+  std::vector<const HeaderEntry*> get(const LowerCaseString& key) const {
+    auto it = headers_.find(key.get());
+    if (it != headers_.end()) {
+      // Create a temporary HeaderEntry and return its pointer
+      // Note: This is a simplified mock - in real Envoy this is more complex
+      entries_.push_back(std::make_unique<HeaderEntry>(it->first, it->second));
+      return {entries_.back().get()};
+    }
+    return {};
+  }
+
+  bool empty() const { return headers_.empty(); }
+
+protected:
+  std::map<std::string, std::string> headers_;
+  mutable std::vector<std::unique_ptr<HeaderEntry>> entries_;
+};
+
+// Mock HTTP request header map
+class RequestHeaderMap : public HeaderMap {
+};
+
+// Mock HTTP response header map
+class ResponseHeaderMap : public HeaderMap {
+};
+
+// Mock HTTP trailer maps
 class RequestTrailerMap {
+  // Minimal implementation - we don't use trailers yet
+};
+
+class ResponseTrailerMap {
   // Minimal implementation - we don't use trailers yet
 };
 
@@ -59,7 +110,11 @@ class StreamDecoderFilterCallbacks {
   // Minimal implementation - we don't use callbacks in current tests
 };
 
-// Mock StreamDecoderFilter interface (base class for our filter)
+class StreamEncoderFilterCallbacks {
+  // Minimal implementation - we don't use callbacks in current tests
+};
+
+// Mock StreamDecoderFilter interface (for request processing)
 class StreamDecoderFilter {
 public:
   virtual ~StreamDecoderFilter() = default;
@@ -70,6 +125,25 @@ public:
                                      bool end_stream) = 0;
   virtual FilterTrailersStatus decodeTrailers(RequestTrailerMap& trailers) = 0;
   virtual void setDecoderFilterCallbacks(StreamDecoderFilterCallbacks& callbacks) = 0;
+};
+
+// Mock StreamEncoderFilter interface (for response processing)
+class StreamEncoderFilter {
+public:
+  virtual ~StreamEncoderFilter() = default;
+
+  virtual FilterHeadersStatus encodeHeaders(ResponseHeaderMap& headers,
+                                           bool end_stream) = 0;
+  virtual FilterDataStatus encodeData(Buffer::Instance& data,
+                                     bool end_stream) = 0;
+  virtual FilterTrailersStatus encodeTrailers(ResponseTrailerMap& trailers) = 0;
+  virtual void setEncoderFilterCallbacks(StreamEncoderFilterCallbacks& callbacks) = 0;
+};
+
+// Mock StreamFilter interface (bidirectional - processes both requests and responses)
+class StreamFilter : public StreamDecoderFilter, public StreamEncoderFilter {
+public:
+  virtual ~StreamFilter() = default;
 };
 
 } // namespace Http

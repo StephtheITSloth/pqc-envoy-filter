@@ -1,4 +1,5 @@
 #include "src/pqc_filter.h"
+#include "src/base64_utils.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -13,13 +14,55 @@ PqcFilter::PqcFilter(std::shared_ptr<PqcFilterConfig> config)
 
 Http::FilterHeadersStatus PqcFilter::decodeHeaders(
     Http::RequestHeaderMap& headers, bool end_stream) {
-  
-  // Log which algorithm we're using (for now, just logging)
-  ENVOY_LOG(info, "PQC Filter using algorithm: {}", 
+
+  // Log which algorithm we're using
+  ENVOY_LOG(info, "PQC Filter using algorithm: {}",
             config_->getAlgorithmName());
-  
-  // For now, just pass through
-  // Later: Add PQC key exchange logic here
+
+  // Check if client is requesting PQC key exchange
+  auto pqc_init_header = headers.get(Http::LowerCaseString("x-pqc-init"));
+  if (!pqc_init_header.empty()) {
+    const auto& value = pqc_init_header[0]->value().getStringView();
+    if (value == "true") {
+      client_requested_pqc_ = true;
+      ENVOY_LOG(info, "Client requested PQC key exchange - will send public key in response");
+    }
+  }
+
+  // Check for X-PQC-Ciphertext header (client sending ciphertext for decapsulation)
+  auto ciphertext_header = headers.get(Http::LowerCaseString("x-pqc-ciphertext"));
+  if (!ciphertext_header.empty()) {
+    const auto& encoded_ciphertext = ciphertext_header[0]->value().getStringView();
+
+    // Base64-decode the ciphertext
+    std::vector<uint8_t> ciphertext = Base64Utils::decode(std::string(encoded_ciphertext));
+
+    if (ciphertext.empty()) {
+      ENVOY_LOG(error, "Failed to decode base64 ciphertext from X-PQC-Ciphertext header");
+      return Http::FilterHeadersStatus::Continue;
+    }
+
+    // Allocate buffer for shared secret
+    if (!shared_secret_) {
+      shared_secret_ = make_secure_buffer(kyber_kem_->length_shared_secret);
+    }
+
+    // Server decapsulates ciphertext to recover shared secret
+    bool success = serverDecapsulate(
+        ciphertext.data(),
+        ciphertext.size(),
+        shared_secret_.get()
+    );
+
+    if (success) {
+      has_shared_secret_ = true;
+      ENVOY_LOG(info, "Successfully decapsulated ciphertext and established shared secret");
+    } else {
+      ENVOY_LOG(error, "Failed to decapsulate ciphertext from client");
+      has_shared_secret_ = false;
+    }
+  }
+
   return Http::FilterHeadersStatus::Continue;
 }
 
@@ -252,6 +295,249 @@ bool PqcFilter::serverDecapsulate(const uint8_t* ciphertext,
 
   ENVOY_LOG(debug, "Server decapsulation successful - recovered shared_secret_size: {} bytes",
             kyber_kem_->length_shared_secret);
+
+  return true;
+}
+
+// ============================================================================
+// RESPONSE PROCESSING (StreamEncoderFilter interface)
+// ============================================================================
+
+Http::FilterHeadersStatus PqcFilter::encodeHeaders(
+    Http::ResponseHeaderMap& headers, bool end_stream) {
+
+  // If client requested PQC, inject our public key in the response
+  if (client_requested_pqc_) {
+    // Base64-encode the Kyber768 public key (1184 bytes → ~1580 chars)
+    std::string encoded_public_key = Base64Utils::encode(
+        kyber_public_key_.get(),
+        kyber_kem_->length_public_key
+    );
+
+    // Add X-PQC-Public-Key header
+    headers.addCopy(
+        Http::LowerCaseString("x-pqc-public-key"),
+        encoded_public_key
+    );
+
+    // Add X-PQC-Status header
+    headers.addCopy(
+        Http::LowerCaseString("x-pqc-status"),
+        "pending"
+    );
+
+    ENVOY_LOG(info, "Sent PQC public key in response header ({} bytes encoded to {} chars)",
+              kyber_kem_->length_public_key, encoded_public_key.size());
+
+    // Reset flag for next request
+    client_requested_pqc_ = false;
+  }
+
+  return Http::FilterHeadersStatus::Continue;
+}
+
+Http::FilterDataStatus PqcFilter::encodeData(
+    Buffer::Instance& data, bool end_stream) {
+  // Pass through response data unchanged
+  return Http::FilterDataStatus::Continue;
+}
+
+Http::FilterTrailersStatus PqcFilter::encodeTrailers(
+    Http::ResponseTrailerMap& trailers) {
+  // Pass through response trailers unchanged
+  return Http::FilterTrailersStatus::Continue;
+}
+
+void PqcFilter::setEncoderFilterCallbacks(
+    Http::StreamEncoderFilterCallbacks& callbacks) {
+  encoder_callbacks_ = &callbacks;
+}
+
+// ============================================================================
+// SHARED SECRET ACCESS METHODS
+// ============================================================================
+
+const uint8_t* PqcFilter::getSharedSecret() const {
+  return has_shared_secret_ ? shared_secret_.get() : nullptr;
+}
+
+size_t PqcFilter::getSharedSecretSize() const {
+  return has_shared_secret_ && kyber_kem_ ? kyber_kem_->length_shared_secret : 0;
+}
+
+// ============================================================================
+// AES-256-GCM ENCRYPTION/DECRYPTION
+// ============================================================================
+
+bool PqcFilter::encryptAES256GCM(const uint8_t* plaintext,
+                                  size_t plaintext_len,
+                                  const uint8_t* key,
+                                  uint8_t* iv,
+                                  std::vector<uint8_t>& ciphertext,
+                                  uint8_t* auth_tag) const {
+  // Validate inputs
+  if (!plaintext || !key || !iv || !auth_tag) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: null pointer parameter");
+    return false;
+  }
+
+  if (plaintext_len == 0) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: empty plaintext");
+    return false;
+  }
+
+  // Generate cryptographically secure random IV (12 bytes for GCM mode)
+  // Uses OpenSSL RAND_bytes for FIPS-compliant random number generation
+  if (RAND_bytes(iv, 12) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: failed to generate secure random IV");
+    return false;
+  }
+
+  // Allocate ciphertext buffer (same size as plaintext for GCM)
+  ciphertext.resize(plaintext_len);
+
+  // Initialize OpenSSL EVP context
+  EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+  if (!ctx) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: failed to create EVP context");
+    return false;
+  }
+
+  // Initialize encryption operation with AES-256-GCM
+  if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: failed to initialize cipher");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+
+  // Set IV length (12 bytes is standard for GCM)
+  if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: failed to set IV length");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+
+  // Initialize key and IV
+  if (EVP_EncryptInit_ex(ctx, nullptr, nullptr, key, iv) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: failed to set key and IV");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+
+  // Encrypt plaintext
+  int len = 0;
+  if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len, plaintext, plaintext_len) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: encryption failed");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+  int ciphertext_len = len;
+
+  // Finalize encryption
+  if (EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: finalization failed");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+  ciphertext_len += len;
+
+  // Get authentication tag (16 bytes)
+  if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, auth_tag) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM encrypt: failed to get authentication tag");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+
+  // Clean up
+  EVP_CIPHER_CTX_free(ctx);
+
+  ENVOY_LOG(debug, "AES-256-GCM encryption successful - plaintext: {} bytes, ciphertext: {} bytes",
+            plaintext_len, ciphertext_len);
+
+  return true;
+}
+
+bool PqcFilter::decryptAES256GCM(const uint8_t* ciphertext,
+                                  size_t ciphertext_len,
+                                  const uint8_t* key,
+                                  const uint8_t* iv,
+                                  const uint8_t* auth_tag,
+                                  std::vector<uint8_t>& plaintext) const {
+  // Validate inputs
+  if (!ciphertext || !key || !iv || !auth_tag) {
+    ENVOY_LOG(error, "AES-256-GCM decrypt: null pointer parameter");
+    return false;
+  }
+
+  if (ciphertext_len == 0) {
+    ENVOY_LOG(error, "AES-256-GCM decrypt: empty ciphertext");
+    return false;
+  }
+
+  // Allocate plaintext buffer (same size as ciphertext for GCM)
+  plaintext.resize(ciphertext_len);
+
+  // Initialize OpenSSL EVP context
+  EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+  if (!ctx) {
+    ENVOY_LOG(error, "AES-256-GCM decrypt: failed to create EVP context");
+    return false;
+  }
+
+  // Initialize decryption operation with AES-256-GCM
+  if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM decrypt: failed to initialize cipher");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+
+  // Set IV length (12 bytes)
+  if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM decrypt: failed to set IV length");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+
+  // Initialize key and IV
+  if (EVP_DecryptInit_ex(ctx, nullptr, nullptr, key, iv) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM decrypt: failed to set key and IV");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+
+  // Decrypt ciphertext
+  int len = 0;
+  if (EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext, ciphertext_len) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM decrypt: decryption failed");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+  int plaintext_len = len;
+
+  // Set expected authentication tag
+  if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, const_cast<uint8_t*>(auth_tag)) != 1) {
+    ENVOY_LOG(error, "AES-256-GCM decrypt: failed to set authentication tag");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+
+  // Finalize decryption and verify authentication tag
+  int ret = EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len);
+  if (ret != 1) {
+    ENVOY_LOG(error, "AES-256-GCM decrypt: finalization failed - authentication tag mismatch (tampering detected)");
+    EVP_CIPHER_CTX_free(ctx);
+    return false;
+  }
+  plaintext_len += len;
+
+  // Resize plaintext to actual size
+  plaintext.resize(plaintext_len);
+
+  // Clean up
+  EVP_CIPHER_CTX_free(ctx);
+
+  ENVOY_LOG(debug, "AES-256-GCM decryption successful - ciphertext: {} bytes, plaintext: {} bytes",
+            ciphertext_len, plaintext_len);
 
   return true;
 }

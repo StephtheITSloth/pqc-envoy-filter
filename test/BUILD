@@ -31,10 +31,24 @@ cc_test(
         "pqc_filter_testable.h",  # Testable version with mocks
         "//src:pqc_crypto_utils.h",  # Secure memory utilities header
     ],
+    linkopts = [
+        "-lcrypto",  # OpenSSL libcrypto for AES-256-GCM
+        "-lssl",     # OpenSSL libssl
+    ],
     deps = [
         "//src:pqc_filter_config_lib",
+        "//src:base64_utils_lib",  # Base64 encoding for HTTP headers
         "//test/mocks:mock_envoy_interfaces",
         "@liboqs//:oqs",  # Post-Quantum Cryptography library
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "base64_utils_test",
+    srcs = ["base64_utils_test.cc"],
+    deps = [
+        "//src:base64_utils_lib",
         "@com_google_googletest//:gtest_main",
     ],
 )
