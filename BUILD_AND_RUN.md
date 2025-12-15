@@ -97,26 +97,87 @@ curl -v http://localhost:10000/get \
 
 # Expected response headers:
 # X-PQC-Public-Key: <base64-encoded Kyber768 public key>
+# X-PQC-Session-ID: <32-character hex session identifier>
 # X-PQC-Status: pending
+```
+
+### Test Session Binding & Replay Attack Prevention (Test 25)
+
+The filter implements session binding to prevent replay attacks:
+
+```bash
+# 1. Request public key and session ID
+RESPONSE=$(curl -s -i http://localhost:10000/get \
+  -H "X-PQC-Init: true")
+
+# Extract public key
+PUBKEY=$(echo "$RESPONSE" | grep -i "x-pqc-public-key" | cut -d: -f2 | tr -d ' \r')
+
+# Extract session ID (REQUIRED for subsequent requests)
+SESSION_ID=$(echo "$RESPONSE" | grep -i "x-pqc-session-id" | cut -d: -f2 | tr -d ' \r')
+
+echo "Session ID: $SESSION_ID"
+echo "Public Key: ${PUBKEY:0:50}..."
+
+# 2. Client encapsulates (requires Python script - see test_client.py)
+# This simulates Test 21 from TDD
+
+# 3. Send ciphertext WITH session ID to establish shared secret
+curl -v http://localhost:10000/get \
+  -H "X-PQC-Ciphertext: $CIPHERTEXT" \
+  -H "X-PQC-Session-ID: $SESSION_ID"
+
+# ⚠️ SECURITY: Requests without session ID are rejected
+# ⚠️ SECURITY: Sessions expire after 5 minutes
+# ⚠️ SECURITY: Session keys are derived using HKDF-SHA256
 ```
 
 ### Test Full Cryptographic Flow
 
 ```bash
-# 1. Request public key
-PUBKEY=$(curl -s http://localhost:10000/get \
-  -H "X-PQC-Init: true" \
-  | grep -i "x-pqc-public-key" \
-  | cut -d: -f2 \
-  | tr -d ' ')
-
-# 2. Client encapsulates (requires Python script - see test_client.py)
-# This simulates Test 21 from TDD
-
-# 3. Send ciphertext to establish shared secret
-curl -v http://localhost:10000/get \
-  -H "X-PQC-Ciphertext: $CIPHERTEXT"
+# Complete key exchange with session binding
+# (See test/pqc_filter_test.cc Test 25 for full implementation)
 ```
+
+### Test Manual Key Rotation (Test 26)
+
+The filter supports manual key rotation with zero-downtime grace period:
+
+```bash
+# 1. Initial key generation (version 1)
+curl -v http://localhost:10000/get \
+  -H "X-PQC-Init: true"
+
+# Response includes: X-PQC-Key-Version: 1
+
+# 2. Establish session with key version 1
+# (Client performs encapsulation with version 1 public key)
+
+# 3. MANUAL ROTATION: Trigger key rotation to version 2
+# (In production, this would be via admin API or signal)
+# filter->rotateKyberKeypair()
+
+# 4. New clients get key version 2
+curl -v http://localhost:10000/get \
+  -H "X-PQC-Init: true"
+
+# Response includes: X-PQC-Key-Version: 2
+
+# 5. GRACE PERIOD: Old sessions (version 1) continue to work
+# Both key versions are accepted during transition
+
+# 6. Zero-downtime rotation verified
+# (See test/pqc_filter_test.cc Test 26 for full implementation)
+```
+
+**Key Rotation Features**:
+- ✅ Key versioning with X-PQC-Key-Version header
+- ✅ Graceful transition: current + previous key both accepted
+- ✅ Thread-safe concurrent access during rotation
+- ✅ **Phase 1**: Manual trigger via `rotateKyberKeypair()` method
+- ✅ **Phase 2**: Automatic time-based rotation with configurable interval (default: 24 hours)
+- ✅ Rotation metrics: count and last rotation timestamp
+- ✅ Enable/disable automatic rotation at runtime
 
 ## Debugging
 
@@ -253,8 +314,10 @@ Continue to backend
 
 ## Next Steps
 
-1. Add Dilithium signatures for public key authentication (Test 25-26)
-2. Implement encrypted body transmission (Test 24)
-3. Add replay attack protection with nonces
-4. Benchmark performance under load
-5. Add Prometheus metrics for monitoring
+1. ✅ Manual key rotation with grace period (Test 26 - Phase 1 complete)
+2. ✅ Automatic time-based key rotation (Test 27 - Phase 2 complete)
+3. Integrate Envoy dispatcher timer for production automatic rotation
+4. Add Dilithium signatures for public key authentication
+5. Implement encrypted body transmission (Test 24)
+6. Benchmark performance under load
+7. Add Prometheus metrics for monitoring

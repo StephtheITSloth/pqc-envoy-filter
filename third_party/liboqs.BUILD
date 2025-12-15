@@ -52,5 +52,6 @@ cmake(
     },
     lib_source = ":all_srcs",
     out_static_libs = ["liboqs.a"],
+    out_include_dir = "include",  # CMake installs headers to include/oqs/
     visibility = ["//visibility:public"],
 )
