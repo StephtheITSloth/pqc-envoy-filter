@@ -1,0 +1,105 @@
+# Bazel build outputs
+bazel-*
+/bazel-bin
+/bazel-out
+/bazel-pqc-envoy-filter
+/bazel-testlogs
+
+# Bazel internal directories
+.bazel/
+.bazelrc.user
+
+# C++ build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.out
+*.app
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.project
+.cproject
+.settings/
+
+# CMake (if used alongside Bazel)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Test and coverage outputs
+*.gcda
+*.gcno
+*.gcov
+coverage/
+test_results/
+*.xml
+
+# Envoy specific
+envoy
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# OS specific
+Thumbs.db
+.DS_Store
+
+# Archive files (large downloads)
+*.tar.gz
+*.zip
+*.tar
+*.tgz
+
+# Python (if any helper scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Documentation build artifacts
+docs/_build/
+*.pdf
+*.aux
+*.fls
+*.fdb_latexmk
+
+# Sensitive data
+*.pem
+*.key
+credentials.json
+.env
+secrets/

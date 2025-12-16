@@ -41,6 +41,7 @@ public:
   explicit PqcFilter(std::shared_ptr<PqcFilterConfig> config) : config_(config) {
     initializeKyber();
     initializeDilithium();
+    initializeX25519();
   }
 
   // Http::StreamDecoderFilter interface (Request processing)
@@ -56,6 +57,16 @@ public:
       if (value == "true") {
         client_requested_pqc_ = true;
         ENVOY_LOG(info, "Client requested PQC key exchange - will send public key in response");
+
+        // Check for X-PQC-Mode header to detect hybrid mode request
+        auto pqc_mode_header = headers.get(Http::LowerCaseString("x-pqc-mode"));
+        if (!pqc_mode_header.empty()) {
+          const auto& mode_value = pqc_mode_header[0]->value().getStringView();
+          if (mode_value == "hybrid") {
+            client_requested_hybrid_mode_ = true;
+            ENVOY_LOG(info, "Client requested HYBRID MODE (Kyber768 + X25519)");
+          }
+        }
       }
     }
 
@@ -106,6 +117,45 @@ public:
       if (success) {
         has_shared_secret_ = true;
 
+        // Check for hybrid mode: X-PQC-X25519-Public-Key header
+        auto x25519_pubkey_header = headers.get(Http::LowerCaseString("x-pqc-x25519-public-key"));
+        if (!x25519_pubkey_header.empty()) {
+          // HYBRID MODE: Combine Kyber768 + X25519 secrets
+          ENVOY_LOG(info, "Hybrid mode: Processing X25519 public key from client");
+
+          const auto& encoded_x25519_pubkey = x25519_pubkey_header[0]->value().getStringView();
+          std::vector<uint8_t> client_x25519_pubkey = Base64Utils::decode(encoded_x25519_pubkey);
+
+          if (client_x25519_pubkey.size() != 32) {
+            ENVOY_LOG(error, "Hybrid mode: Invalid X25519 public key length: expected 32, got {}",
+                      client_x25519_pubkey.size());
+            has_shared_secret_ = false;
+            return Http::FilterHeadersStatus::Continue;
+          }
+
+          // Perform server-side X25519 DH exchange
+          uint8_t x25519_shared_secret[32];
+          if (!serverX25519Exchange(client_x25519_pubkey.data(), 32, x25519_shared_secret)) {
+            ENVOY_LOG(error, "Hybrid mode: X25519 key exchange failed");
+            has_shared_secret_ = false;
+            return Http::FilterHeadersStatus::Continue;
+          }
+
+          // Combine Kyber768 + X25519 secrets using HKDF
+          uint8_t combined_secret[32];
+          if (!combineHybridSecrets(shared_secret_.get(), 32,
+                                    x25519_shared_secret, 32,
+                                    combined_secret)) {
+            ENVOY_LOG(error, "Hybrid mode: Failed to combine secrets");
+            has_shared_secret_ = false;
+            return Http::FilterHeadersStatus::Continue;
+          }
+
+          // Use combined secret as the final shared secret
+          std::memcpy(shared_secret_.get(), combined_secret, 32);
+          ENVOY_LOG(info, "Hybrid mode: Successfully combined Kyber768 + X25519 secrets");
+        }
+
         // Associate shared secret with session
         auto& session = sessions_[session_id_];
         std::memcpy(session.shared_secret.get(), shared_secret_.get(), 32);
@@ -114,7 +164,7 @@ public:
         // Derive session-specific key from shared secret + session metadata
         bool kdf_success = deriveSessionKey(
             shared_secret_.get(),
-            32,  // Kyber768 shared secret length
+            32,  // Kyber768 shared secret length (or combined secret in hybrid mode)
             session.session_id,
             session.created_at,
             session.session_key.get()
@@ -245,10 +295,29 @@ public:
       // Add X-PQC-Status header
       headers.addCopy(Http::LowerCaseString("x-pqc-status"), "pending");
 
+      // HYBRID MODE: If client requested hybrid mode, also send X25519 public key
+      if (client_requested_hybrid_mode_) {
+        // Base64-encode the X25519 public key (32 bytes)
+        std::string encoded_x25519_pubkey = base64Encode(
+            x25519_public_key_.get(),
+            32
+        );
+
+        // Add X-PQC-X25519-Public-Key header
+        headers.addCopy(Http::LowerCaseString("x-pqc-x25519-public-key"), encoded_x25519_pubkey);
+
+        // Add X-PQC-Mode header to indicate hybrid mode
+        headers.addCopy(Http::LowerCaseString("x-pqc-mode"), "hybrid");
+
+        ENVOY_LOG(info, "Hybrid mode: Injected X25519 public key in response headers ({} bytes base64-encoded)",
+                  encoded_x25519_pubkey.size());
+      }
+
       ENVOY_LOG(info, "Injected PQC public key in response headers ({} bytes base64-encoded), session_id: {}",
                 encoded_public_key.size(), session_id_);
 
       client_requested_pqc_ = false;  // Reset flag
+      client_requested_hybrid_mode_ = false;  // Reset hybrid mode flag
     }
 
     return Http::FilterHeadersStatus::Continue;
@@ -282,9 +351,14 @@ public:
     return dilithium_sig_ ? dilithium_sig_->length_public_key : 0;
   }
 
+  // X25519 ECDH public key access (for hybrid mode)
+  const uint8_t* getX25519PublicKey() const { return x25519_public_key_.get(); }
+  size_t getX25519PublicKeySize() const { return 32; }  // X25519 always 32 bytes
+
   // Status check methods
   bool hasKyberInitialized() const { return kyber_kem_ != nullptr; }
   bool hasDilithiumInitialized() const { return dilithium_sig_ != nullptr; }
+  bool hasX25519Initialized() const { return x25519_public_key_ != nullptr; }
 
   // Shared secret access (established after server decapsulation)
   const uint8_t* getSharedSecret() const {
@@ -572,6 +646,267 @@ public:
   }
 
   /**
+   * Client-side X25519 key exchange (for hybrid mode).
+   *
+   * Performs X25519 ECDH key exchange:
+   * 1. Generates client's X25519 keypair
+   * 2. Performs DH with server's X25519 public key
+   * 3. Computes shared secret
+   *
+   * @param server_x25519_public_key Server's X25519 public key (32 bytes)
+   * @param server_public_key_len Length (must be 32)
+   * @param out_client_public_key Output: client's X25519 public key (32 bytes)
+   * @param out_shared_secret Output: X25519 shared secret (32 bytes)
+   * @return true if exchange succeeded, false otherwise
+   */
+  bool clientX25519Exchange(const uint8_t* server_x25519_public_key,
+                            size_t server_public_key_len,
+                            uint8_t* out_client_public_key,
+                            uint8_t* out_shared_secret) const {
+    if (!server_x25519_public_key || !out_client_public_key || !out_shared_secret) {
+      ENVOY_LOG(error, "X25519: Invalid null parameters");
+      return false;
+    }
+
+    if (server_public_key_len != 32) {
+      ENVOY_LOG(error, "X25519: Invalid public key length: expected 32, got {}", server_public_key_len);
+      return false;
+    }
+
+    // Generate client's X25519 keypair
+    uint8_t client_secret_key[32];
+    if (RAND_bytes(client_secret_key, 32) != 1) {
+      ENVOY_LOG(error, "X25519: Failed to generate random secret key");
+      return false;
+    }
+
+    // Compute client's public key from secret key
+    // X25519 public key = scalar multiplication of base point
+    if (EVP_PKEY_derive_init(nullptr) <= 0) {  // Simplified for test
+      // For TDD, we'll use a simpler approach
+      // In production, use EVP_PKEY_derive with X25519
+
+      // Simplified X25519: Generate public key and shared secret using OpenSSL
+      EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, nullptr);
+      if (!pctx) {
+        ENVOY_LOG(error, "X25519: Failed to create context");
+        return false;
+      }
+
+      EVP_PKEY* pkey = nullptr;
+      if (EVP_PKEY_keygen_init(pctx) <= 0 ||
+          EVP_PKEY_keygen(pctx, &pkey) <= 0) {
+        ENVOY_LOG(error, "X25519: Failed to generate keypair");
+        EVP_PKEY_CTX_free(pctx);
+        return false;
+      }
+
+      // Extract public key
+      size_t pub_len = 32;
+      if (EVP_PKEY_get_raw_public_key(pkey, out_client_public_key, &pub_len) <= 0 || pub_len != 32) {
+        ENVOY_LOG(error, "X25519: Failed to extract public key");
+        EVP_PKEY_free(pkey);
+        EVP_PKEY_CTX_free(pctx);
+        return false;
+      }
+
+      // Create server's public key EVP_PKEY
+      EVP_PKEY* server_pkey = EVP_PKEY_new_raw_public_key(
+          EVP_PKEY_X25519, nullptr, server_x25519_public_key, 32);
+      if (!server_pkey) {
+        ENVOY_LOG(error, "X25519: Failed to create server public key");
+        EVP_PKEY_free(pkey);
+        EVP_PKEY_CTX_free(pctx);
+        return false;
+      }
+
+      // Perform DH exchange
+      EVP_PKEY_CTX* derive_ctx = EVP_PKEY_CTX_new(pkey, nullptr);
+      if (!derive_ctx ||
+          EVP_PKEY_derive_init(derive_ctx) <= 0 ||
+          EVP_PKEY_derive_set_peer(derive_ctx, server_pkey) <= 0) {
+        ENVOY_LOG(error, "X25519: Failed to initialize derivation");
+        EVP_PKEY_free(server_pkey);
+        EVP_PKEY_free(pkey);
+        EVP_PKEY_CTX_free(pctx);
+        if (derive_ctx) EVP_PKEY_CTX_free(derive_ctx);
+        return false;
+      }
+
+      size_t secret_len = 32;
+      if (EVP_PKEY_derive(derive_ctx, out_shared_secret, &secret_len) <= 0 || secret_len != 32) {
+        ENVOY_LOG(error, "X25519: Failed to derive shared secret");
+        EVP_PKEY_CTX_free(derive_ctx);
+        EVP_PKEY_free(server_pkey);
+        EVP_PKEY_free(pkey);
+        EVP_PKEY_CTX_free(pctx);
+        return false;
+      }
+
+      // Cleanup
+      EVP_PKEY_CTX_free(derive_ctx);
+      EVP_PKEY_free(server_pkey);
+      EVP_PKEY_free(pkey);
+      EVP_PKEY_CTX_free(pctx);
+
+      ENVOY_LOG(debug, "X25519: Key exchange successful");
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Server-side X25519 key exchange (for hybrid mode).
+   *
+   * Performs server-side X25519 ECDH using server's private key:
+   * 1. Takes client's X25519 public key
+   * 2. Uses server's X25519 private key (from initializeX25519())
+   * 3. Computes shared secret via DH
+   *
+   * @param client_x25519_public_key Client's X25519 public key (32 bytes)
+   * @param client_public_key_len Length (must be 32)
+   * @param out_shared_secret Output: X25519 shared secret (32 bytes)
+   * @return true if exchange succeeded, false otherwise
+   */
+  bool serverX25519Exchange(const uint8_t* client_x25519_public_key,
+                            size_t client_public_key_len,
+                            uint8_t* out_shared_secret) const {
+    if (!client_x25519_public_key || !out_shared_secret) {
+      ENVOY_LOG(error, "Server X25519: Invalid null parameters");
+      return false;
+    }
+
+    if (client_public_key_len != 32) {
+      ENVOY_LOG(error, "Server X25519: Invalid client public key length: expected 32, got {}",
+                client_public_key_len);
+      return false;
+    }
+
+    if (!x25519_secret_key_ || !x25519_public_key_) {
+      ENVOY_LOG(error, "Server X25519: Server keypair not initialized");
+      return false;
+    }
+
+    // Create server's private key EVP_PKEY from raw key
+    EVP_PKEY* server_pkey = EVP_PKEY_new_raw_private_key(
+        EVP_PKEY_X25519, nullptr, x25519_secret_key_.get(), 32);
+    if (!server_pkey) {
+      ENVOY_LOG(error, "Server X25519: Failed to create server private key");
+      return false;
+    }
+
+    // Create client's public key EVP_PKEY
+    EVP_PKEY* client_pkey = EVP_PKEY_new_raw_public_key(
+        EVP_PKEY_X25519, nullptr, client_x25519_public_key, 32);
+    if (!client_pkey) {
+      ENVOY_LOG(error, "Server X25519: Failed to create client public key");
+      EVP_PKEY_free(server_pkey);
+      return false;
+    }
+
+    // Perform DH exchange
+    EVP_PKEY_CTX* derive_ctx = EVP_PKEY_CTX_new(server_pkey, nullptr);
+    if (!derive_ctx ||
+        EVP_PKEY_derive_init(derive_ctx) <= 0 ||
+        EVP_PKEY_derive_set_peer(derive_ctx, client_pkey) <= 0) {
+      ENVOY_LOG(error, "Server X25519: Failed to initialize derivation");
+      EVP_PKEY_free(client_pkey);
+      EVP_PKEY_free(server_pkey);
+      if (derive_ctx) EVP_PKEY_CTX_free(derive_ctx);
+      return false;
+    }
+
+    size_t secret_len = 32;
+    if (EVP_PKEY_derive(derive_ctx, out_shared_secret, &secret_len) <= 0 || secret_len != 32) {
+      ENVOY_LOG(error, "Server X25519: Failed to derive shared secret");
+      EVP_PKEY_CTX_free(derive_ctx);
+      EVP_PKEY_free(client_pkey);
+      EVP_PKEY_free(server_pkey);
+      return false;
+    }
+
+    // Cleanup
+    EVP_PKEY_CTX_free(derive_ctx);
+    EVP_PKEY_free(client_pkey);
+    EVP_PKEY_free(server_pkey);
+
+    ENVOY_LOG(debug, "Server X25519: Key exchange successful");
+    return true;
+  }
+
+  /**
+   * Combine Kyber768 and X25519 secrets for hybrid mode.
+   *
+   * Uses HKDF-SHA256 to combine:
+   * final_secret = HKDF-Extract-And-Expand(kyber_secret || x25519_secret)
+   *
+   * @param kyber_secret Kyber768 shared secret (32 bytes)
+   * @param kyber_len Length of Kyber secret
+   * @param x25519_secret X25519 shared secret (32 bytes)
+   * @param x25519_len Length of X25519 secret
+   * @param out_combined_secret Output: combined secret (32 bytes)
+   * @return true if combination succeeded, false otherwise
+   */
+  bool combineHybridSecrets(const uint8_t* kyber_secret, size_t kyber_len,
+                            const uint8_t* x25519_secret, size_t x25519_len,
+                            uint8_t* out_combined_secret) const {
+    if (!kyber_secret || !x25519_secret || !out_combined_secret) {
+      ENVOY_LOG(error, "Hybrid combine: Invalid null parameters");
+      return false;
+    }
+
+    if (kyber_len != 32 || x25519_len != 32) {
+      ENVOY_LOG(error, "Hybrid combine: Invalid secret lengths (expected 32+32)");
+      return false;
+    }
+
+    // Concatenate secrets: kyber || x25519
+    std::vector<uint8_t> concat_secrets(64);
+    std::memcpy(concat_secrets.data(), kyber_secret, 32);
+    std::memcpy(concat_secrets.data() + 32, x25519_secret, 32);
+
+    // Use HKDF-SHA256 to derive final secret
+    // Salt: "PQC-Hybrid-Mode" for domain separation
+    const char* salt_str = "PQC-Hybrid-Mode";
+    const unsigned char* salt = reinterpret_cast<const unsigned char*>(salt_str);
+    size_t salt_len = std::strlen(salt_str);
+
+    // Info: "Kyber768+X25519"
+    const char* info_str = "Kyber768+X25519";
+    const unsigned char* info = reinterpret_cast<const unsigned char*>(info_str);
+    size_t info_len = std::strlen(info_str);
+
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
+    if (!pctx) {
+      ENVOY_LOG(error, "Hybrid HKDF: Failed to create context");
+      return false;
+    }
+
+    if (EVP_PKEY_derive_init(pctx) <= 0 ||
+        EVP_PKEY_CTX_set_hkdf_mode(pctx, EVP_PKEY_HKDEF_MODE_EXTRACT_AND_EXPAND) <= 0 ||
+        EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256()) <= 0 ||
+        EVP_PKEY_CTX_set1_hkdf_key(pctx, concat_secrets.data(), 64) <= 0 ||
+        EVP_PKEY_CTX_set1_hkdf_salt(pctx, salt, salt_len) <= 0 ||
+        EVP_PKEY_CTX_add1_hkdf_info(pctx, info, info_len) <= 0) {
+      ENVOY_LOG(error, "Hybrid HKDF: Setup failed");
+      EVP_PKEY_CTX_free(pctx);
+      return false;
+    }
+
+    size_t out_len = 32;
+    if (EVP_PKEY_derive(pctx, out_combined_secret, &out_len) <= 0 || out_len != 32) {
+      ENVOY_LOG(error, "Hybrid HKDF: Failed to derive combined secret");
+      EVP_PKEY_CTX_free(pctx);
+      return false;
+    }
+
+    EVP_PKEY_CTX_free(pctx);
+    ENVOY_LOG(debug, "Hybrid mode: Successfully combined Kyber768 + X25519 secrets");
+    return true;
+  }
+
+  /**
    * AES-256-GCM Encryption (Client-side operation)
    *
    * Encrypts plaintext using the shared secret derived from Kyber768 key exchange.
@@ -779,6 +1114,7 @@ private:
 
   // HTTP header key exchange state
   bool client_requested_pqc_{false};  // Track if client sent X-PQC-Init header
+  bool client_requested_hybrid_mode_{false};  // Track if client requested hybrid mode (Kyber768 + X25519)
 
   // Session management
   struct SessionData {
@@ -968,6 +1304,10 @@ private:
   SecureBuffer dilithium_public_key_;
   SecureBuffer dilithium_secret_key_;
 
+  // X25519 ECDH keypair (for hybrid mode)
+  SecureBuffer x25519_public_key_;
+  SecureBuffer x25519_secret_key_;
+
   // Initialization functions
   void initializeKyber() {
     // Simple stub for now - full implementation will be in pqc_filter.cc
@@ -1029,6 +1369,51 @@ private:
     }
 
     ENVOY_LOG(info, "ML-DSA-65 (Dilithium3) initialized successfully");
+  }
+
+  void initializeX25519() {
+    // Generate X25519 keypair using OpenSSL
+    x25519_public_key_ = make_secure_buffer(32);  // X25519 public key is always 32 bytes
+    x25519_secret_key_ = make_secure_buffer(32);  // X25519 secret key is always 32 bytes
+
+    // Create X25519 keypair context
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, nullptr);
+    if (!pctx) {
+      ENVOY_LOG(error, "Failed to create X25519 context");
+      return;
+    }
+
+    EVP_PKEY* pkey = nullptr;
+    if (EVP_PKEY_keygen_init(pctx) <= 0 ||
+        EVP_PKEY_keygen(pctx, &pkey) <= 0) {
+      ENVOY_LOG(error, "Failed to generate X25519 keypair");
+      EVP_PKEY_CTX_free(pctx);
+      return;
+    }
+
+    // Extract public key
+    size_t pub_len = 32;
+    if (EVP_PKEY_get_raw_public_key(pkey, x25519_public_key_.get(), &pub_len) <= 0 || pub_len != 32) {
+      ENVOY_LOG(error, "Failed to extract X25519 public key");
+      EVP_PKEY_free(pkey);
+      EVP_PKEY_CTX_free(pctx);
+      return;
+    }
+
+    // Extract private key
+    size_t priv_len = 32;
+    if (EVP_PKEY_get_raw_private_key(pkey, x25519_secret_key_.get(), &priv_len) <= 0 || priv_len != 32) {
+      ENVOY_LOG(error, "Failed to extract X25519 private key");
+      EVP_PKEY_free(pkey);
+      EVP_PKEY_CTX_free(pctx);
+      return;
+    }
+
+    // Cleanup
+    EVP_PKEY_free(pkey);
+    EVP_PKEY_CTX_free(pctx);
+
+    ENVOY_LOG(info, "X25519 ECDH initialized successfully for hybrid mode");
   }
 };
 

@@ -312,12 +312,65 @@ Continue to backend
 - **Dilithium3 (ML-DSA-65)**: Digital signatures (initialized, not yet used)
 - **OpenSSL RAND_bytes**: FIPS-compliant random IV generation
 
+### Test Hybrid Mode (Test 28)
+
+The filter supports hybrid mode defense-in-depth by combining Kyber768 + X25519:
+
+```bash
+# 1. Client requests hybrid mode key exchange
+curl -v http://localhost:10000/get \
+  -H "X-PQC-Init: true" \
+  -H "X-PQC-Mode: hybrid"
+
+# Expected response headers:
+# X-PQC-Public-Key: <base64-encoded Kyber768 public key>
+# X-PQC-X25519-Public-Key: <base64-encoded X25519 public key (44 chars)>
+# X-PQC-Session-ID: <32-character hex session identifier>
+# X-PQC-Mode: hybrid
+# X-PQC-Status: pending
+
+# 2. Extract both public keys
+RESPONSE=$(curl -s -i http://localhost:10000/get \
+  -H "X-PQC-Init: true" \
+  -H "X-PQC-Mode: hybrid")
+
+KYBER_PUBKEY=$(echo "$RESPONSE" | grep -i "x-pqc-public-key:" | cut -d: -f2 | tr -d ' \r')
+X25519_PUBKEY=$(echo "$RESPONSE" | grep -i "x-pqc-x25519-public-key:" | cut -d: -f2 | tr -d ' \r')
+SESSION_ID=$(echo "$RESPONSE" | grep -i "x-pqc-session-id:" | cut -d: -f2 | tr -d ' \r')
+
+echo "Kyber768 Public Key: ${KYBER_PUBKEY:0:50}..."
+echo "X25519 Public Key: $X25519_PUBKEY"
+echo "Session ID: $SESSION_ID"
+
+# 3. Client performs hybrid key exchange (requires Python script with liboqs)
+# - Kyber768 encapsulation -> KYBER_CIPHERTEXT
+# - X25519 key exchange -> CLIENT_X25519_PUBKEY
+# - Combine secrets: HKDF(kyber_secret || x25519_secret)
+
+# 4. Send both ciphertexts to establish hybrid shared secret
+curl -v http://localhost:10000/get \
+  -H "X-PQC-Ciphertext: $KYBER_CIPHERTEXT" \
+  -H "X-PQC-X25519-Public-Key: $CLIENT_X25519_PUBKEY" \
+  -H "X-PQC-Session-ID: $SESSION_ID"
+
+# ✅ SECURITY: Combined secret provides defense against both classical and quantum attacks
+# ✅ BACKWARD COMPATIBLE: Pure Kyber768 mode still works without X-PQC-Mode header
+```
+
+**Hybrid Mode Benefits**:
+- ✅ Defense-in-depth: Attacker must break BOTH Kyber768 AND X25519
+- ✅ Quantum resistance: Kyber768 protects against quantum computers
+- ✅ Classical security: X25519 provides 128-bit security today
+- ✅ Migration path: Smooth transition to pure PQC in the future
+- ✅ Overhead: Only +88 bytes per handshake (+2.9%)
+
 ## Next Steps
 
 1. ✅ Manual key rotation with grace period (Test 26 - Phase 1 complete)
 2. ✅ Automatic time-based key rotation (Test 27 - Phase 2 complete)
-3. Integrate Envoy dispatcher timer for production automatic rotation
-4. Add Dilithium signatures for public key authentication
-5. Implement encrypted body transmission (Test 24)
-6. Benchmark performance under load
-7. Add Prometheus metrics for monitoring
+3. ✅ Hybrid mode defense-in-depth (Test 28 complete)
+4. Integrate Envoy dispatcher timer for production automatic rotation
+5. Add Dilithium signatures for public key authentication
+6. Implement encrypted body transmission (Test 24)
+7. Benchmark performance under load
+8. Add Prometheus metrics for monitoring

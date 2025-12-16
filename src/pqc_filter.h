@@ -13,9 +13,10 @@
 #include <openssl/rand.h>
 #include <openssl/kdf.h>
 
-// C++ standard library for session management
+// C++ standard library for session management and error tracking
 #include <chrono>
 #include <map>
+#include <unordered_map>
 
 namespace Envoy {
 namespace Extensions {
@@ -63,9 +64,14 @@ public:
     return dilithium_sig_ ? dilithium_sig_->length_public_key : 0;
   }
 
+  // X25519 ECDH public key access (for hybrid mode)
+  const uint8_t* getX25519PublicKey() const { return x25519_public_key_.get(); }
+  size_t getX25519PublicKeySize() const { return 32; }  // X25519 always 32 bytes
+
   // Status check methods
   bool hasKyberInitialized() const { return kyber_kem_ != nullptr; }
   bool hasDilithiumInitialized() const { return dilithium_sig_ != nullptr; }
+  bool hasX25519Initialized() const { return x25519_public_key_ != nullptr; }
 
   // Shared secret access (established after server decapsulation)
   const uint8_t* getSharedSecret() const;
@@ -213,13 +219,174 @@ public:
                         const uint8_t* auth_tag,
                         std::vector<uint8_t>& plaintext) const;
 
+  // Hybrid mode (Kyber768 + X25519) operations
+
+  /**
+   * Client-side X25519 key exchange (for hybrid mode).
+   *
+   * Performs X25519 ECDH key exchange:
+   * 1. Generates client's X25519 keypair
+   * 2. Performs DH with server's X25519 public key
+   * 3. Computes shared secret
+   *
+   * @param server_x25519_public_key Server's X25519 public key (32 bytes)
+   * @param server_public_key_len Length (must be 32)
+   * @param out_client_public_key Output: client's X25519 public key (32 bytes)
+   * @param out_shared_secret Output: X25519 shared secret (32 bytes)
+   * @return true if exchange succeeded, false otherwise
+   */
+  bool clientX25519Exchange(const uint8_t* server_x25519_public_key,
+                            size_t server_public_key_len,
+                            uint8_t* out_client_public_key,
+                            uint8_t* out_shared_secret) const;
+
+  /**
+   * Server-side X25519 key exchange (for hybrid mode).
+   *
+   * Performs server-side X25519 ECDH using server's private key:
+   * 1. Takes client's X25519 public key
+   * 2. Uses server's X25519 private key (from initializeX25519())
+   * 3. Computes shared secret via DH
+   *
+   * @param client_x25519_public_key Client's X25519 public key (32 bytes)
+   * @param client_public_key_len Length (must be 32)
+   * @param out_shared_secret Output: X25519 shared secret (32 bytes)
+   * @return true if exchange succeeded, false otherwise
+   */
+  bool serverX25519Exchange(const uint8_t* client_x25519_public_key,
+                            size_t client_public_key_len,
+                            uint8_t* out_shared_secret) const;
+
+  /**
+   * Combine Kyber768 and X25519 secrets for hybrid mode.
+   *
+   * Uses HKDF-SHA256 to combine:
+   * final_secret = HKDF-Extract-And-Expand(kyber_secret || x25519_secret)
+   *
+   * @param kyber_secret Kyber768 shared secret (32 bytes)
+   * @param kyber_len Length of Kyber secret
+   * @param x25519_secret X25519 shared secret (32 bytes)
+   * @param x25519_len Length of X25519 secret
+   * @param out_combined_secret Output: combined secret (32 bytes)
+   * @return true if combination succeeded, false otherwise
+   */
+  bool combineHybridSecrets(const uint8_t* kyber_secret, size_t kyber_len,
+                            const uint8_t* x25519_secret, size_t x25519_len,
+                            uint8_t* out_combined_secret) const;
+
+  // ============================================================================
+  // ERROR HANDLING & GRACEFUL DEGRADATION
+  // ============================================================================
+
+  /**
+   * Generic error codes for X-PQC-Error-Code header.
+   * These codes are intentionally vague to prevent oracle attacks.
+   * SECURITY: All crypto failures MUST return CRYPTO_OPERATION_FAILED.
+   */
+  enum class PqcErrorCode {
+    SUCCESS = 0,                    // No error
+    INVALID_REQUEST = 1000,         // Generic request validation failure (missing headers, bad format)
+    CRYPTO_OPERATION_FAILED = 2000, // Generic cryptographic operation failure (ALL crypto errors)
+    RATE_LIMIT_EXCEEDED = 3000,     // Too many errors from this client IP
+    SERVICE_UNAVAILABLE = 4000,     // Circuit breaker open or system overloaded
+    INTERNAL_ERROR = 5000           // Generic internal error
+  };
+
+  /**
+   * Circuit breaker state for per-client error tracking.
+   */
+  enum class CircuitState {
+    CLOSED,      // Normal operation - requests allowed
+    OPEN,        // Too many failures - rejecting all requests
+    HALF_OPEN    // Testing recovery - allowing limited requests
+  };
+
+  /**
+   * Extract client IP address from request headers.
+   * Checks X-Forwarded-For, X-Real-IP, and falls back to peer address.
+   *
+   * @param headers Request headers
+   * @return Client IP address (e.g., "192.168.1.100")
+   */
+  std::string getClientIp(const Http::RequestHeaderMap& headers) const;
+
+  /**
+   * Record error for circuit breaker and rate limiting.
+   * SECURITY: This method enforces both circuit breaker and rate limiting.
+   *
+   * @param client_ip Client IP address
+   * @return true if request should be allowed, false if blocked by circuit breaker or rate limit
+   */
+  bool recordError(const std::string& client_ip);
+
+  /**
+   * Check if circuit breaker is open for a client IP.
+   *
+   * @param client_ip Client IP address
+   * @return true if circuit breaker is open (requests should be rejected)
+   */
+  bool isCircuitBreakerOpen(const std::string& client_ip) const;
+
+  /**
+   * Record successful operation (for circuit breaker recovery).
+   *
+   * @param client_ip Client IP address
+   */
+  void recordSuccess(const std::string& client_ip);
+
+  /**
+   * Clean up old error states to prevent memory exhaustion.
+   * Should be called periodically (e.g., every 10 minutes).
+   */
+  void cleanupOldErrorStates();
+
+  /**
+   * Convert error code to string for header value.
+   *
+   * @param error_code Error code enum
+   * @return String representation (e.g., "2000")
+   */
+  static std::string errorCodeToString(PqcErrorCode error_code);
+
+  /**
+   * Handle PQC error securely - send error response without leaking information.
+   * SECURITY: All crypto errors use CRYPTO_OPERATION_FAILED to prevent oracle attacks.
+   *
+   * @param error_code Generic error code
+   * @param client_ip Client IP address (for logging context only)
+   * @return FilterHeadersStatus::Continue (degradation policy dependent)
+   */
+  Http::FilterHeadersStatus handlePqcError(PqcErrorCode error_code,
+                                            const std::string& client_ip);
+
 private:
   std::shared_ptr<PqcFilterConfig> config_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{nullptr};
   Http::StreamEncoderFilterCallbacks* encoder_callbacks_{nullptr};
 
+  // ============================================================================
+  // ERROR HANDLING STATE
+  // ============================================================================
+
+  /**
+   * Per-client error tracking for circuit breaker and rate limiting.
+   * SECURITY: Memory bounded - cleanup removes old entries.
+   */
+  struct ClientErrorState {
+    uint32_t error_count = 0;                                         // Total errors in current window
+    std::chrono::system_clock::time_point last_error;                 // Timestamp of last error
+    std::chrono::system_clock::time_point window_start;               // Start of current rate limit window
+    CircuitState circuit_state = CircuitState::CLOSED;                // Current circuit breaker state
+    std::chrono::system_clock::time_point circuit_opened_at;          // When circuit was opened
+    uint32_t success_count = 0;                                       // Successes in HALF_OPEN state
+  };
+
+  mutable std::unordered_map<std::string, ClientErrorState> client_errors_;  // IP -> error state
+  mutable std::chrono::system_clock::time_point last_cleanup_;                // Last cleanup time
+
   // HTTP header key exchange state
   bool client_requested_pqc_{false};  // Track if client sent X-PQC-Init header
+  bool client_requested_hybrid_mode_{false};  // Track if client requested hybrid mode (Kyber768 + X25519)
 
   // Session management
   struct SessionData {
@@ -286,6 +453,10 @@ private:
   SecureBuffer dilithium_public_key_;
   SecureBuffer dilithium_secret_key_;
 
+  // X25519 ECDH keypair (for hybrid mode)
+  SecureBuffer x25519_public_key_;
+  SecureBuffer x25519_secret_key_;
+
   // Automatic key rotation state (Phase 2)
   bool automatic_rotation_enabled_{false};
   std::chrono::milliseconds rotation_interval_{std::chrono::hours(24)};  // Default: 24 hours
@@ -295,6 +466,7 @@ private:
   // Initialization functions
   void initializeKyber();
   void initializeDilithium();
+  void initializeX25519();
 };
 
 } // namespace PqcFilter
