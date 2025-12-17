@@ -92,10 +92,14 @@ jobs:
           cat .bazelversion
 
       - name: Run Bazel unit tests (32 tests)
+        env:
+          USE_BAZEL_VERSION: "6.5.0"
         run: |
-          # Configure Bazel to use user-writable cache directory
+          # Clean Bazel cache to force re-download of rules_python 0.26.0
+          # The cached version has wrong rules_python with missing symbols
+          rm -rf $HOME/.cache/bazel
           mkdir -p $HOME/.cache/bazel
-          # Run tests - Envoy's old rules_python version is compatible with Bazel 6.5.0
+          # Run tests with fresh cache
           bazel --output_user_root=$HOME/.cache/bazel test //test:pqc_filter_test --test_output=errors --jobs=2
 
       - name: Clean Bazel artifacts before Docker build
