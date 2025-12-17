@@ -94,16 +94,15 @@ jobs:
       - name: Run Bazel unit tests (32 tests)
         env:
           USE_BAZEL_VERSION: "6.5.0"
+          BAZELISK_HOME: "${{ runner.temp }}/bazelisk"
         run: |
-          # Create writable Bazel cache directory FIRST
+          # BAZELISK_HOME tells Bazelisk where to cache Bazel binaries (writable location)
+          mkdir -p ${{ runner.temp }}/bazelisk
           mkdir -p $HOME/.cache/bazel
-          # CRITICAL: Clean ALL caches to force re-download of patched Envoy
-          # Use --output_user_root on clean command too to avoid permission errors
-          bazel --output_user_root=$HOME/.cache/bazel clean --expunge 2>/dev/null || true
-          rm -rf ~/.cache/bazel ~/.cache/bazelisk
-          rm -rf /home/runner/.cache/bazel /home/runner/.cache/bazelisk
+          # Clean old caches
+          rm -rf ~/.cache/bazel ~/.cache/bazelisk /home/runner/.cache/bazel
           mkdir -p $HOME/.cache/bazel
-          # Run tests with patched Envoy (python_register_toolchains removed from load)
+          # Run tests - Bazelisk will download Bazel to $BAZELISK_HOME (writable)
           bazel --output_user_root=$HOME/.cache/bazel test //test:pqc_filter_test --test_output=errors --jobs=2
 
       - name: Clean Bazel artifacts before Docker build
