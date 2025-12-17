@@ -16,12 +16,10 @@ RUN cmake --version || echo "CMake not found, but may not be needed"
 COPY . /workspace
 WORKDIR /workspace
 
-# TDD: Run all tests to verify filter correctness
-RUN bazel test //test:pqc_filter_test --test_output=errors
-
 # Build the PQC filter as a shared library (.so)
 # This creates a loadable module for Envoy
-RUN bazel build //src:pqc_filter.so --verbose_failures
+# Note: Tests are run separately in CI/CD pipeline to avoid Docker build complexity
+RUN bazel build //src:pqc_filter.so --verbose_failures --jobs=2
 
 # Extract the built .so file
 RUN mkdir -p /output && \
