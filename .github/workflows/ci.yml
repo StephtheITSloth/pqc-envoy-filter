@@ -92,9 +92,11 @@ jobs:
       - name: Clean Bazel artifacts before Docker build
         run: |
           # Clean Bazel symlinks to avoid permission issues with Docker Buildx
-          bazel clean --expunge 2>/dev/null || true
-          # Remove symlink directories that might cause EACCES errors
-          rm -rf bazel-* 2>/dev/null || true
+          # Use sudo to forcefully remove directories that may have restrictive permissions
+          sudo rm -rf bazel-* || true
+          sudo bazel clean --expunge || true
+          # Verify cleanup
+          ls -la | grep bazel || echo "Bazel artifacts cleaned successfully"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

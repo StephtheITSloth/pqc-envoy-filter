@@ -1,0 +1,43 @@
+# Docker build context ignore file
+# Excludes unnecessary files to speed up builds and avoid permission issues
+
+# Bazel build artifacts and symlinks
+bazel-*
+.bazel
+.bazelrc.user
+
+# Git metadata
+.git/
+.gitignore
+.github/
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+test-docker.sh
+
+# Python
+*.pyc
+__pycache__/
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+test-output.log
+*.log
