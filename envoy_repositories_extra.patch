@@ -11,7 +11,7 @@
  load("//bazel/external/cargo:crates.bzl", "raze_fetch_remote_crates")
 
  def _python_minor_version(python_version):
-@@ -21,10 +23,12 @@ def envoy_dependencies_extra(
+@@ -21,9 +23,11 @@ def envoy_dependencies_extra(
      wasmtime_fetch_remote_crates()
      py_repositories()
 
@@ -28,5 +28,4 @@
 +    #     python_version = python_version,
 +    #     ignore_root_user_error = ignore_root_user_error,
 +    # )
-
-     aspect_bazel_lib_dependencies()
++
