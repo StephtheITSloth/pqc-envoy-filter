@@ -86,7 +86,15 @@ jobs:
           repository-cache: true
 
       - name: Run Bazel unit tests (32 tests)
-        run: bazel test //test:pqc_filter_test --test_output=errors --jobs=2
+        run: |
+          bazel test //test:pqc_filter_test --test_output=errors --jobs=2
+
+      - name: Clean Bazel artifacts before Docker build
+        run: |
+          # Clean Bazel symlinks to avoid permission issues with Docker Buildx
+          bazel clean --expunge 2>/dev/null || true
+          # Remove symlink directories that might cause EACCES errors
+          rm -rf bazel-* 2>/dev/null || true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
