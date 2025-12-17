@@ -90,6 +90,7 @@ jobs:
         run: |
           # Configure Bazel to use user-writable cache directory
           mkdir -p $HOME/.cache/bazel
+          # Run tests - Envoy's old rules_python version is compatible with Bazel 6.5.0
           bazel --output_user_root=$HOME/.cache/bazel test //test:pqc_filter_test --test_output=errors --jobs=2
 
       - name: Clean Bazel artifacts before Docker build

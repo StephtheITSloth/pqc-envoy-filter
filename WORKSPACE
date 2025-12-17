@@ -100,14 +100,22 @@ http_archive(
     urls = ["https://github.com/envoyproxy/envoy/archive/v1.28.0.tar.gz"],
 )
 
-# Load only Envoy API dependencies (for protobufs and headers)
-# We skip the full envoy_dependencies() to avoid transitive dependency conflicts
-# The filter only needs headers at compile time, not the full Envoy build system
+# Load Envoy dependencies
+# Note: This loads the full Envoy build system including test infrastructure
 load("@envoy//bazel:api_binding.bzl", "envoy_api_binding")
 envoy_api_binding()
 
 load("@envoy//bazel:api_repositories.bzl", "envoy_api_dependencies")
 envoy_api_dependencies()
+
+load("@envoy//bazel:repositories.bzl", "envoy_dependencies")
+envoy_dependencies()
+
+load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
+envoy_dependencies_extra()
+
+load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
+envoy_dependency_imports()
 
 # ============================================================================
 # Production Strategy: Headers-Only + Runtime Linking
