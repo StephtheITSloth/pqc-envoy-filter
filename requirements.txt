@@ -1,0 +1,10 @@
+# Python dependencies for PQC test client
+
+# HTTP client
+requests>=2.31.0
+
+# Post-quantum cryptography library
+liboqs-python>=0.10.0
+
+# Cryptographic utilities
+cryptography>=41.0.0
