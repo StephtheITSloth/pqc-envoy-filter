@@ -88,7 +88,9 @@ jobs:
 
       - name: Run Bazel unit tests (32 tests)
         run: |
-          bazel test //test:pqc_filter_test --test_output=errors --jobs=2
+          # Configure Bazel to use user-writable cache directory
+          mkdir -p $HOME/.cache/bazel
+          bazel --output_user_root=$HOME/.cache/bazel test //test:pqc_filter_test --test_output=errors --jobs=2
 
       - name: Clean Bazel artifacts before Docker build
         run: |

@@ -11,10 +11,10 @@ Http::FilterFactoryCb PqcFilterFactory::createFilterFactoryFromProtoTyped(
     const envoy::extensions::filters::http::pqc_filter::v3::PqcFilter& proto_config,
     const std::string&,
     Server::Configuration::FactoryContext&) {
-  
+
   // Create config from protobuf
   auto config = std::make_shared<PqcFilterConfig>(proto_config.algorithm_name());
-  
+
   // Return a lambda that creates filter instances
   return [config](Http::FilterChainFactoryCallbacks& callbacks) -> void {
     callbacks.addStreamDecoderFilter(
