@@ -36,7 +36,7 @@ cc_library(
     deps = [
         ":pqc_filter_config_lib",
         ":pqc_filter_cc_proto",
-        
+
         # Envoy factory dependencies
         "@envoy//source/extensions/filters/http/common:factory_base_lib",
         "@envoy//include/envoy/server:filter_config_interface",

@@ -145,6 +145,13 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
+      - name: Final cleanup of Bazel artifacts
+        if: always()
+        run: |
+          # Remove all Bazel artifacts to prevent cache action from accessing them
+          sudo rm -rf bazel-* || true
+          ls -la | grep bazel || echo "All Bazel artifacts removed"
+
   # ============================================================================
   # Job 4: Build Multi-Platform Images
   # ============================================================================

@@ -23,7 +23,7 @@ Http::FilterFactoryCb PqcFilterFactory::createFilterFactoryFromProtoTyped(
 }
 
 // Register the factory with Envoy
-REGISTER_FACTORY(PqcFilterFactory, 
+REGISTER_FACTORY(PqcFilterFactory,
                  Server::Configuration::NamedHttpFilterConfigFactory);
 
 } // namespace PqcFilter
