@@ -36,6 +36,7 @@ cc_test(
         "-lssl",     # OpenSSL libssl
     ],
     deps = [
+        "//src:pqc_filter_lib",  # Main filter implementation with error handling
         "//src:pqc_filter_config_lib",
         "//src:base64_utils_lib",  # Base64 encoding for HTTP headers
         "//test/mocks:mock_envoy_interfaces",
