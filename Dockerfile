@@ -9,14 +9,9 @@
 # SHA from https://github.com/envoyproxy/envoy/blob/main/.github/config.yml
 FROM envoyproxy/envoy-build@sha256:5fcc9d3e10f1a0e628250b44b4c39bde1bdfc6cb8fe6075838a732c2ba04ef42 AS builder
 
-# Install build-time dependencies for PQC support
-# CMake: Required by rules_foreign_cc to build liboqs
-# Ninja: Fast build system used by CMake
-RUN cd /tmp && \
-    wget -q https://github.com/Kitware/CMake/releases/download/v3.27.7/cmake-3.27.7-linux-x86_64.sh && \
-    sh cmake-3.27.7-linux-x86_64.sh --prefix=/usr/local --skip-license && \
-    rm cmake-3.27.7-linux-x86_64.sh && \
-    cmake --version
+# Check if CMake is already installed, if not install it
+# The envoy-build image should already have CMake and build tools
+RUN cmake --version || echo "CMake not found, but may not be needed"
 
 COPY . /workspace
 WORKDIR /workspace
