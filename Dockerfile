@@ -5,7 +5,9 @@
 # ============================================================================
 # STAGE 1: Build the PQC filter using Bazel
 # ============================================================================
-FROM envoyproxy/envoy-build-ubuntu:latest AS builder
+# Use the official Envoy build image with pinned SHA256 for reproducible builds
+# SHA from https://github.com/envoyproxy/envoy/blob/main/.github/config.yml
+FROM envoyproxy/envoy-build@sha256:5fcc9d3e10f1a0e628250b44b4c39bde1bdfc6cb8fe6075838a732c2ba04ef42 AS builder
 
 # Install build-time dependencies for PQC support
 # CMake: Required by rules_foreign_cc to build liboqs
