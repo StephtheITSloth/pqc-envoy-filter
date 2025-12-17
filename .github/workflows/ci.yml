@@ -78,12 +78,13 @@ jobs:
         uses: actions/checkout@v4
 
       # Run unit tests with Bazel before Docker build
-      - name: Set up Bazel
-        uses: bazel-contrib/setup-bazel@0.8.1
-        with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
-          repository-cache: true
+      - name: Install Bazelisk
+        run: |
+          # Install Bazelisk (Bazel launcher) without caching to avoid permission issues
+          wget -q https://github.com/bazelbuild/bazelisk/releases/download/v1.19.0/bazelisk-linux-amd64
+          chmod +x bazelisk-linux-amd64
+          sudo mv bazelisk-linux-amd64 /usr/local/bin/bazel
+          bazel --version
 
       - name: Run Bazel unit tests (32 tests)
         run: |
@@ -91,10 +92,10 @@ jobs:
 
       - name: Clean Bazel artifacts before Docker build
         run: |
-          # Clean Bazel symlinks to avoid permission issues with Docker Buildx
-          # Use sudo to forcefully remove directories that may have restrictive permissions
-          sudo rm -rf bazel-* || true
-          sudo bazel clean --expunge || true
+          # Clean Bazel symlinks to avoid issues with Docker Buildx
+          # Must remove before any cache actions run in post-job phase
+          bazel clean --expunge || true
+          rm -rf bazel-* || true
           # Verify cleanup
           ls -la | grep bazel || echo "Bazel artifacts cleaned successfully"
 
