@@ -33,7 +33,8 @@ FROM envoyproxy/envoy:v1.28.0
 
 # Install OpenSSL runtime libraries (needed for AES-256-GCM)
 USER root
-RUN apt-get update && apt-get install -y \
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
