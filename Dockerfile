@@ -42,11 +42,16 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the compiled PQC filter from builder stage
-COPY --from=builder /output/pqc_filter.so /etc/envoy/filters/pqc_filter.so
+# SECURITY: Create non-root user for Envoy
+RUN groupadd --system --gid 101 envoy && \
+    useradd --system --gid envoy --uid 101 --home-dir /var/empty \
+    --no-create-home --shell /sbin/nologin envoy && \
+    mkdir -p /etc/envoy/filters /var/log/envoy && \
+    chown -R envoy:envoy /etc/envoy /var/log/envoy
 
-# Copy Envoy configuration
-COPY envoy.yaml /etc/envoy/envoy.yaml
+# SECURITY: Copy files with non-root ownership
+COPY --from=builder --chown=envoy:envoy /output/pqc_filter.so /etc/envoy/filters/pqc_filter.so
+COPY --chown=envoy:envoy envoy.yaml /etc/envoy/envoy.yaml
 
 # Expose ports
 # 10000: Main HTTP listener (with PQC filter)
@@ -60,6 +65,13 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu
 HEALTHCHECK --interval=30s --timeout=3s \
   CMD curl -f http://localhost:9901/ready || exit 1
 
-# Run Envoy with our configuration
-# Debug logging enabled to see PQC filter in action
+# Security labels
+LABEL security.non-root=true
+LABEL security.user=envoy
+LABEL security.uid=101
+
+# SECURITY: Switch to non-root user before running Envoy
+USER envoy
+
+# Run Envoy with our configuration (now as non-root user)
 CMD ["/usr/local/bin/envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
