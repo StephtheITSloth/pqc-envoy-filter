@@ -96,13 +96,14 @@ jobs:
           USE_BAZEL_VERSION: "6.5.0"
         run: |
           # CRITICAL: Force complete clean of Bazel caches
-          # The hash dd48072b... in error indicates GitHub Actions is caching repos
-          # across workflow runs. We need to invalidate ALL caches.
+          # The patch to Envoy requires fresh download to apply correctly
           bazel clean --expunge 2>/dev/null || true
           rm -rf ~/.cache/bazel ~/.cache/bazelisk
           rm -rf /home/runner/.cache/bazel /home/runner/.cache/bazelisk
-          # Run tests - Bazel will download fresh rules_python 0.26.0 from our WORKSPACE
-          bazel test //test:pqc_filter_test --test_output=errors --jobs=2
+          # Create writable Bazel cache directory
+          mkdir -p $HOME/.cache/bazel
+          # Run tests with patched Envoy (python_register_toolchains removed)
+          bazel --output_user_root=$HOME/.cache/bazel test //test:pqc_filter_test --test_output=errors --jobs=2
 
       - name: Clean Bazel artifacts before Docker build
         run: |
