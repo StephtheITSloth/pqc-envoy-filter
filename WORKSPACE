@@ -87,6 +87,22 @@ http_archive(
 )
 
 # ============================================================================
+# rules_python - Load BEFORE Envoy (version must match Envoy v1.28.0)
+# ============================================================================
+# Envoy v1.28.0 expects rules_python 0.26.0
+# Loading it first ensures Bazel uses this version instead of a newer incompatible one
+
+http_archive(
+    name = "rules_python",
+    sha256 = "9d04041ac92a0985e344235f5d946f71ac543f1b1565f2cdbc9a2aaee8adf55b",
+    strip_prefix = "rules_python-0.26.0",
+    urls = ["https://github.com/bazelbuild/rules_python/releases/download/0.26.0/rules_python-0.26.0.tar.gz"],
+)
+
+load("@rules_python//python:repositories.bzl", "py_repositories")
+py_repositories()
+
+# ============================================================================
 # Envoy - Service Proxy (Headers for compilation)
 # ============================================================================
 # We use Envoy v1.28.0 for compatibility with existing deployments
@@ -100,8 +116,7 @@ http_archive(
     urls = ["https://github.com/envoyproxy/envoy/archive/v1.28.0.tar.gz"],
 )
 
-# Load Envoy dependencies
-# Note: This loads the full Envoy build system including test infrastructure
+# Load Envoy dependencies - now with rules_python pre-loaded
 load("@envoy//bazel:api_binding.bzl", "envoy_api_binding")
 envoy_api_binding()
 
@@ -111,15 +126,11 @@ envoy_api_dependencies()
 load("@envoy//bazel:repositories.bzl", "envoy_dependencies")
 envoy_dependencies()
 
-# SKIP repositories_extra - it loads Python tooling we don't need for C++ filters
-# This avoids the rules_python python_register_toolchains symbol error
-# load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
-# envoy_dependencies_extra()
+load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
+envoy_dependencies_extra()
 
-# SKIP dependency_imports - it requires dependencies from repositories_extra
-# We don't need Node.js tooling for C++ filters
-# load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
-# envoy_dependency_imports()
+load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
+envoy_dependency_imports()
 
 # ============================================================================
 # Production Strategy: Headers-Only + Runtime Linking
