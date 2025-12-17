@@ -26,10 +26,10 @@ TEST_F(PqcFilterFactoryTest, CanCreateFilterFromProto) {
   // Create a proto config
   envoy::extensions::filters::http::pqc_filter::v3::PqcFilter proto_config;
   proto_config.set_algorithm_name("Falcon512");
-  
+
   // This should not throw
   auto filter_callback = factory_.createFilterFactoryFromProtoTyped(
       proto_config, "stats", context_);
-  
+
   ASSERT_TRUE(filter_callback != nullptr);
 }
