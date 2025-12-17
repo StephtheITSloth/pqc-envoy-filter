@@ -87,19 +87,6 @@ http_archive(
 )
 
 # ============================================================================
-# rules_python - Load BEFORE Envoy to prevent version conflicts
-# ============================================================================
-# Envoy v1.28.0 uses an old rules_python that has deprecated APIs
-# We load a compatible old version here to satisfy both Bazel and Envoy
-
-http_archive(
-    name = "rules_python",
-    sha256 = "5fa3c738d33acca3b97622a13153e3f3e7e24c9f8f1db6e0c6f5e9e8b3e8d5e5",
-    strip_prefix = "rules_python-0.8.1",
-    urls = ["https://github.com/bazelbuild/rules_python/archive/refs/tags/0.8.1.tar.gz"],
-)
-
-# ============================================================================
 # Envoy - Service Proxy (Headers for compilation)
 # ============================================================================
 # We use Envoy v1.28.0 for compatibility with existing deployments
@@ -124,8 +111,10 @@ envoy_api_dependencies()
 load("@envoy//bazel:repositories.bzl", "envoy_dependencies")
 envoy_dependencies()
 
-load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
-envoy_dependencies_extra()
+# SKIP repositories_extra - it loads Python tooling we don't need for C++ filters
+# This avoids the rules_python python_register_toolchains symbol error
+# load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
+# envoy_dependencies_extra()
 
 load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
 envoy_dependency_imports()
