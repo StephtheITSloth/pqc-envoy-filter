@@ -114,25 +114,22 @@ http_archive(
     sha256 = "c5628b609ef9e5fafe872b8828089a189bfbffb6e261b8c4d34eff4c65229a3f",
     strip_prefix = "envoy-1.28.0",
     urls = ["https://github.com/envoyproxy/envoy/archive/v1.28.0.tar.gz"],
-    patches = ["@//:envoy_repositories_extra.patch"],
-    patch_args = ["-p1"],
+    build_file_content = """
+cc_library(
+    name = "headers",
+    hdrs = glob([
+        "envoy/**/*.h",
+        "source/**/*.h",
+    ]),
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+""",
 )
 
-# Load Envoy dependencies - now with rules_python pre-loaded
-load("@envoy//bazel:api_binding.bzl", "envoy_api_binding")
-envoy_api_binding()
-
-load("@envoy//bazel:api_repositories.bzl", "envoy_api_dependencies")
-envoy_api_dependencies()
-
-load("@envoy//bazel:repositories.bzl", "envoy_dependencies")
-envoy_dependencies()
-
-load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
-envoy_dependencies_extra()
-
-load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
-envoy_dependency_imports()
+# Note: We only need Envoy headers for compilation (using custom BUILD file)
+# The actual Envoy binary comes from the official Docker image at runtime
+# We skip all Envoy dependency loading to avoid build system conflicts
 
 # ============================================================================
 # Production Strategy: Headers-Only + Runtime Linking

@@ -17,6 +17,28 @@ services:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
     networks:
       - pqc-network
+
+    # SECURITY: Hardening options
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+
+    # Resource limits (prevents DoS)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9901/ready"]
       interval: 10s

@@ -77,10 +77,9 @@ cc_library(
         #                     Need to use OQS_ENABLE_SIG_SLH_DSA=OFF in liboqs.BUILD
         "@liboqs//:oqs",
 
-        # Envoy filter interfaces
-        "@envoy//include/envoy/http:filter_interface",
-        "@envoy//source/common/buffer:buffer_lib",
-        "@envoy//source/common/common:logger_lib",
+        # Envoy headers - headers-only for compilation
+        # The actual Envoy binary comes from the Docker image at runtime
+        "@envoy//:headers",
     ],
 )
 
