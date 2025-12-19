@@ -31,29 +31,18 @@ RUN git clone --depth 1 --branch 0.9.0 https://github.com/open-quantum-safe/libo
     ninja -C build && \
     ninja -C build install
 
-# Download Envoy v1.28.0 headers (needed for filter compilation)
-# Note: Only headers are needed, not the full Envoy build
-WORKDIR /tmp/envoy-headers
-RUN git clone --depth 1 --branch v1.28.0 https://github.com/envoyproxy/envoy.git . && \
-    mkdir -p /usr/local/include/envoy && \
-    cp -r include/* /usr/local/include/envoy/ && \
-    cp -r source /usr/local/include/envoy/
-
-# Build the filter using CMake
+# Build the filter using CMake (no Envoy headers needed - using C ABI!)
 WORKDIR /workspace/build
-RUN cmake -GNinja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CXX_FLAGS="-I/usr/local/include/envoy" \
-        .. && \
+RUN cmake -GNinja -DCMAKE_BUILD_TYPE=Release .. && \
     ninja && \
     mkdir -p /output && \
-    cp pqc_filter.so /output/ && \
-    ls -lh /output/pqc_filter.so
+    cp libpqc_filter.so /output/ && \
+    ls -lh /output/libpqc_filter.so
 
 # ============================================================================
-# STAGE 2: Runtime with official Envoy v1.28.0
+# STAGE 2: Runtime with official Envoy v1.36 (Dynamic Modules support)
 # ============================================================================
-FROM envoyproxy/envoy:v1.28.0
+FROM envoyproxy/envoy:v1.36.2
 
 # Install OpenSSL runtime libraries (needed for AES-256-GCM)
 USER root
@@ -73,8 +62,11 @@ RUN groupadd --system --gid 101 envoy && \
     chown -R envoy:envoy /etc/envoy /var/log/envoy
 
 # SECURITY: Copy files with non-root ownership
-COPY --from=builder --chown=envoy:envoy /output/pqc_filter.so /etc/envoy/filters/pqc_filter.so
+COPY --from=builder --chown=envoy:envoy /output/libpqc_filter.so /etc/envoy/filters/libpqc_filter.so
 COPY --chown=envoy:envoy envoy.yaml /etc/envoy/envoy.yaml
+
+# Set environment variable for dynamic module search path
+ENV ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/etc/envoy/filters
 
 # Expose ports
 # 10000: Main HTTP listener (with PQC filter)
