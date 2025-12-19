@@ -103,35 +103,50 @@ load("@rules_python//python:repositories.bzl", "py_repositories")
 py_repositories()
 
 # ============================================================================
-# Envoy - Not Included in Bazel Build
+# Envoy - Docker Build Only
 # ============================================================================
-# NOTE: Bazel unit tests cannot build due to Envoy's complex dependency chain
-# (requires specific rules_python versions, generated proto files, etc.)
+# NOTE: Envoy dependencies loaded for Docker builds using envoyproxy/envoy-build
+# Local Bazel tests WILL FAIL - use Docker instead: docker-compose up --build
 #
-# The filter builds successfully in Docker using Envoy's official build image.
-# Tests should be run via:
-# - Docker integration tests: ./test-client.py
-# - CI/CD pipeline: GitHub Actions builds Docker image and runs tests
-#
-# The Dockerfile handles all Envoy dependencies properly.
+# The envoy-build Docker image has Envoy and dependencies pre-installed
+# This WORKSPACE configuration works in that environment but not locally
+
+http_archive(
+    name = "envoy",
+    sha256 = "c5628b609ef9e5fafe872b8828089a189bfbffb6e261b8c4d34eff4c65229a3f",
+    strip_prefix = "envoy-1.28.0",
+    urls = ["https://github.com/envoyproxy/envoy/archive/v1.28.0.tar.gz"],
+)
+
+# Load Envoy dependencies - required for Docker build
+load("@envoy//bazel:api_binding.bzl", "envoy_api_binding")
+envoy_api_binding()
+
+load("@envoy//bazel:api_repositories.bzl", "envoy_api_dependencies")
+envoy_api_dependencies()
+
+load("@envoy//bazel:repositories.bzl", "envoy_dependencies")
+envoy_dependencies()
+
+load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
+envoy_dependencies_extra()
+
+load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
+envoy_dependency_imports()
 
 # ============================================================================
 # Production Strategy: Docker-Based Build
 # ============================================================================
 #
 # BUILD PHASE (Docker):
-# - Use envoyproxy/envoy-build image with all dependencies
-# - Compile filter to .so file
+# - Use envoyproxy/envoy-build image (has all Envoy deps pre-installed)
+# - Compile filter to .so file via Bazel
 # - Fast builds using cached layers
 #
 # RUNTIME PHASE (Docker):
-# - Use envoyproxy/envoy image
+# - Use envoyproxy/envoy:v1.28.0 image
 # - Load compiled .so filter
 # - Full Envoy functionality with PQC protection
-#
-# RUNTIME PHASE:
-# - Filter .so links against official Envoy binary in Docker
-# - Use envoyproxy/envoy:v1.28.0 official image
 # - Filter loaded via dynamic_modules configuration
 #
 # BENEFITS:
