@@ -62,8 +62,10 @@ test_results/
 *.xml
 
 # Envoy specific
-envoy
+/envoy
 *.log
+# But allow our stub headers
+!include/envoy/
 
 # Temporary files
 *.tmp
