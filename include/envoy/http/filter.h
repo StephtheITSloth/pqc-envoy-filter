@@ -93,33 +93,43 @@ private:
   std::string str_;
 };
 
+// StringView for header values
+class StringView {
+public:
+  StringView() : data_(nullptr), size_(0) {}
+  StringView(const char* data, size_t size) : data_(data), size_(size) {}
+  StringView(const std::string& str) : data_(str.data()), size_(str.size()) {}
+  const char* data() const { return data_; }
+  size_t size() const { return size_; }
+  std::string toString() const { return std::string(data_, size_); }
+  operator std::string() const { return toString(); }
+  bool operator==(const char* rhs) const {
+    return size_ == strlen(rhs) && memcmp(data_, rhs, size_) == 0;
+  }
+  bool operator==(const std::string& rhs) const {
+    return size_ == rhs.size() && memcmp(data_, rhs.data(), size_) == 0;
+  }
+private:
+  const char* data_;
+  size_t size_;
+};
+
 class HeaderEntry {
 public:
   virtual ~HeaderEntry() = default;
 
-  // StringView for header values
-  class StringView {
+  // HeaderString wraps a StringView and provides getStringView()
+  class HeaderString {
   public:
-    StringView() : data_(nullptr), size_(0) {}
-    StringView(const char* data, size_t size) : data_(data), size_(size) {}
-    StringView(const std::string& str) : data_(str.data()), size_(str.size()) {}
-    const char* data() const { return data_; }
-    size_t size() const { return size_; }
-    std::string toString() const { return std::string(data_, size_); }
-    operator std::string() const { return toString(); }
-    bool operator==(const char* rhs) const {
-      return size_ == strlen(rhs) && memcmp(data_, rhs, size_) == 0;
-    }
-    bool operator==(const std::string& rhs) const {
-      return size_ == rhs.size() && memcmp(data_, rhs.data(), size_) == 0;
-    }
+    HeaderString() = default;
+    HeaderString(const std::string& str) : str_(str) {}
+    StringView getStringView() const { return StringView(str_); }
   private:
-    const char* data_;
-    size_t size_;
+    std::string str_;
   };
 
-  virtual StringView value() const = 0;
-  virtual StringView key() const = 0;
+  virtual const HeaderString& value() const = 0;
+  virtual const HeaderString& key() const = 0;
 };
 
 class HeaderMap {
@@ -128,9 +138,6 @@ public:
   virtual std::vector<const HeaderEntry*> get(const LowerCaseString& key) const = 0;
   virtual void addCopy(const LowerCaseString& key, const std::string& value) = 0;
   virtual void remove(const LowerCaseString& key) = 0;
-
-  // Helper to get string view
-  using GetStringView = HeaderEntry::StringView;
 };
 
 class RequestHeaderMap : public HeaderMap {};
