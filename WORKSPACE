@@ -128,8 +128,9 @@ envoy_api_dependencies()
 load("@envoy//bazel:repositories.bzl", "envoy_dependencies")
 envoy_dependencies()
 
-load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
-envoy_dependencies_extra()
+# REMOVED: envoy_dependencies_extra() causes rules_python conflicts (exit code 36)
+# load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
+# envoy_dependencies_extra()
 
 load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
 envoy_dependency_imports()
