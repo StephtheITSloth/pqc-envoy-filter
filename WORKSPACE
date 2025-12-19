@@ -103,42 +103,31 @@ load("@rules_python//python:repositories.bzl", "py_repositories")
 py_repositories()
 
 # ============================================================================
-# Envoy - Service Proxy (Headers for compilation)
+# Envoy - Not Included in Bazel Build
 # ============================================================================
-# We use Envoy v1.28.0 for compatibility with existing deployments
-# Note: This is a LARGE download (~500MB) but only needed for headers at build time
-# The actual Envoy binary comes from the official Docker image at runtime
-
-http_archive(
-    name = "envoy",
-    sha256 = "c5628b609ef9e5fafe872b8828089a189bfbffb6e261b8c4d34eff4c65229a3f",
-    strip_prefix = "envoy-1.28.0",
-    urls = ["https://github.com/envoyproxy/envoy/archive/v1.28.0.tar.gz"],
-    build_file_content = """
-cc_library(
-    name = "headers",
-    hdrs = glob([
-        "envoy/**/*.h",
-        "source/**/*.h",
-    ]),
-    includes = ["."],
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
-# Note: We only need Envoy headers for compilation (using custom BUILD file)
-# The actual Envoy binary comes from the official Docker image at runtime
-# We skip all Envoy dependency loading to avoid build system conflicts
+# NOTE: Bazel unit tests cannot build due to Envoy's complex dependency chain
+# (requires specific rules_python versions, generated proto files, etc.)
+#
+# The filter builds successfully in Docker using Envoy's official build image.
+# Tests should be run via:
+# - Docker integration tests: ./test-client.py
+# - CI/CD pipeline: GitHub Actions builds Docker image and runs tests
+#
+# The Dockerfile handles all Envoy dependencies properly.
 
 # ============================================================================
-# Production Strategy: Headers-Only + Runtime Linking
+# Production Strategy: Docker-Based Build
 # ============================================================================
 #
-# BUILD PHASE:
-# - Compile filter using protobuf definitions only
-# - No Envoy source code needed during build
-# - Fast, clean builds (minutes not hours)
+# BUILD PHASE (Docker):
+# - Use envoyproxy/envoy-build image with all dependencies
+# - Compile filter to .so file
+# - Fast builds using cached layers
+#
+# RUNTIME PHASE (Docker):
+# - Use envoyproxy/envoy image
+# - Load compiled .so filter
+# - Full Envoy functionality with PQC protection
 #
 # RUNTIME PHASE:
 # - Filter .so links against official Envoy binary in Docker

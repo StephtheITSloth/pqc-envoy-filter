@@ -1,3 +1,0 @@
-# Empty patch - rules_python 0.26.0 actually HAS python_register_toolchains
-# The original error was due to Bazel cache issues
-# This placeholder file is kept to avoid breaking the WORKSPACE patch reference

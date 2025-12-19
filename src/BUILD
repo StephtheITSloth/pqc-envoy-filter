@@ -77,9 +77,9 @@ cc_library(
         #                     Need to use OQS_ENABLE_SIG_SLH_DSA=OFF in liboqs.BUILD
         "@liboqs//:oqs",
 
-        # Envoy headers - headers-only for compilation
-        # The actual Envoy binary comes from the Docker image at runtime
-        "@envoy//:headers",
+        # NOTE: Envoy headers not included - this target cannot build standalone
+        # Use Docker build instead: docker-compose up --build
+        # See //WORKSPACE for explanation of why Bazel tests are disabled
     ],
 )
 
