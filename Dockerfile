@@ -10,7 +10,8 @@
 FROM ubuntu:22.04 AS builder
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y \
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     ninja-build \
@@ -23,27 +24,24 @@ WORKDIR /workspace
 COPY . .
 
 # Install liboqs from source
-RUN cd /tmp && \
-    git clone --depth 1 --branch 0.9.0 https://github.com/open-quantum-safe/liboqs.git && \
-    cd liboqs && \
-    mkdir build && cd build && \
-    cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local .. && \
-    ninja && \
-    ninja install && \
-    cd / && rm -rf /tmp/liboqs
+WORKDIR /tmp/liboqs-build
+RUN git clone --depth 1 --branch 0.9.0 https://github.com/open-quantum-safe/liboqs.git . && \
+    mkdir build && \
+    cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -B build && \
+    ninja -C build && \
+    ninja -C build install
 
 # Download Envoy v1.28.0 headers (needed for filter compilation)
 # Note: Only headers are needed, not the full Envoy build
-RUN cd /tmp && \
-    git clone --depth 1 --branch v1.28.0 https://github.com/envoyproxy/envoy.git && \
+WORKDIR /tmp/envoy-headers
+RUN git clone --depth 1 --branch v1.28.0 https://github.com/envoyproxy/envoy.git . && \
     mkdir -p /usr/local/include/envoy && \
-    cp -r envoy/include/* /usr/local/include/envoy/ && \
-    cp -r envoy/source /usr/local/include/envoy/ && \
-    cd / && rm -rf /tmp/envoy
+    cp -r include/* /usr/local/include/envoy/ && \
+    cp -r source /usr/local/include/envoy/
 
 # Build the filter using CMake
-RUN mkdir -p build && cd build && \
-    cmake -GNinja \
+WORKDIR /workspace/build
+RUN cmake -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_FLAGS="-I/usr/local/include/envoy" \
         .. && \
