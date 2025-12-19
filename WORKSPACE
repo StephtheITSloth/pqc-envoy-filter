@@ -103,37 +103,38 @@ load("@rules_python//python:repositories.bzl", "py_repositories")
 py_repositories()
 
 # ============================================================================
-# Envoy - Docker Build Only
+# Envoy - DISABLED for Docker CMake Build
 # ============================================================================
-# NOTE: Envoy dependencies loaded for Docker builds using envoyproxy/envoy-build
-# Local Bazel tests WILL FAIL - use Docker instead: docker-compose up --build
+# NOTE: Envoy dependencies cause rules_python conflicts in Bazel (exit code 36)
+# Docker build now uses CMake instead of Bazel
+# Local Bazel tests are not supported - use Docker: docker-compose up --build
 #
-# The envoy-build Docker image has Envoy and dependencies pre-installed
-# This WORKSPACE configuration works in that environment but not locally
+# The following Envoy dependencies are COMMENTED OUT:
+# - All envoy_*_dependencies() calls cause Python toolchain conflicts
+# - Docker build uses CMake with downloaded Envoy headers instead
 
-http_archive(
-    name = "envoy",
-    sha256 = "c5628b609ef9e5fafe872b8828089a189bfbffb6e261b8c4d34eff4c65229a3f",
-    strip_prefix = "envoy-1.28.0",
-    urls = ["https://github.com/envoyproxy/envoy/archive/v1.28.0.tar.gz"],
-)
+# http_archive(
+#     name = "envoy",
+#     sha256 = "c5628b609ef9e5fafe872b8828089a189bfbffb6e261b8c4d34eff4c65229a3f",
+#     strip_prefix = "envoy-1.28.0",
+#     urls = ["https://github.com/envoyproxy/envoy/archive/v1.28.0.tar.gz"],
+# )
 
-# Load Envoy dependencies - required for Docker build
-load("@envoy//bazel:api_binding.bzl", "envoy_api_binding")
-envoy_api_binding()
-
-load("@envoy//bazel:api_repositories.bzl", "envoy_api_dependencies")
-envoy_api_dependencies()
-
-load("@envoy//bazel:repositories.bzl", "envoy_dependencies")
-envoy_dependencies()
-
-# REMOVED: envoy_dependencies_extra() causes rules_python conflicts (exit code 36)
+# All Envoy dependency loads DISABLED - use CMake build in Docker
+# load("@envoy//bazel:api_binding.bzl", "envoy_api_binding")
+# envoy_api_binding()
+#
+# load("@envoy//bazel:api_repositories.bzl", "envoy_api_dependencies")
+# envoy_api_dependencies()
+#
+# load("@envoy//bazel:repositories.bzl", "envoy_dependencies")
+# envoy_dependencies()
+#
 # load("@envoy//bazel:repositories_extra.bzl", "envoy_dependencies_extra")
 # envoy_dependencies_extra()
-
-load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
-envoy_dependency_imports()
+#
+# load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
+# envoy_dependency_imports()
 
 # ============================================================================
 # Production Strategy: Docker-Based Build

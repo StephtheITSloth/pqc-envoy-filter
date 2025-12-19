@@ -3,24 +3,53 @@
 # Architecture: Build filter .so → Load into official Envoy binary
 
 # ============================================================================
-# STAGE 1: Build the PQC filter using Bazel
+# STAGE 1: Build the PQC filter using CMake
 # ============================================================================
-# Use the official Envoy build image with pinned SHA256 for reproducible builds
-# SHA from https://github.com/envoyproxy/envoy/blob/main/.github/config.yml
-# NOTE: Bazel works fine in this Docker environment. Local Bazel builds won't work.
-FROM envoyproxy/envoy-build@sha256:5fcc9d3e10f1a0e628250b44b4c39bde1bdfc6cb8fe6075838a732c2ba04ef42 AS builder
+# Bazel build fails due to unresolvable rules_python conflicts with Envoy
+# Using CMake instead with vendored Envoy headers
+FROM ubuntu:22.04 AS builder
 
-COPY . /workspace
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
+    libssl-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
+COPY . .
 
-# Build the PQC filter as a shared library (.so)
-# This creates a loadable module for Envoy
-# Note: Tests are run separately in CI/CD pipeline to avoid Docker build complexity
-RUN bazel build //src:pqc_filter.so --verbose_failures --jobs=2
+# Install liboqs from source
+RUN cd /tmp && \
+    git clone --depth 1 --branch 0.9.0 https://github.com/open-quantum-safe/liboqs.git && \
+    cd liboqs && \
+    mkdir build && cd build && \
+    cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local .. && \
+    ninja && \
+    ninja install && \
+    cd / && rm -rf /tmp/liboqs
 
-# Extract the built .so file
-RUN mkdir -p /output && \
-    cp bazel-bin/src/pqc_filter.so /output/pqc_filter.so && \
+# Download Envoy v1.28.0 headers (needed for filter compilation)
+# Note: Only headers are needed, not the full Envoy build
+RUN cd /tmp && \
+    git clone --depth 1 --branch v1.28.0 https://github.com/envoyproxy/envoy.git && \
+    mkdir -p /usr/local/include/envoy && \
+    cp -r envoy/include/* /usr/local/include/envoy/ && \
+    cp -r envoy/source /usr/local/include/envoy/ && \
+    cd / && rm -rf /tmp/envoy
+
+# Build the filter using CMake
+RUN mkdir -p build && cd build && \
+    cmake -GNinja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_FLAGS="-I/usr/local/include/envoy" \
+        .. && \
+    ninja && \
+    mkdir -p /output && \
+    cp pqc_filter.so /output/ && \
     ls -lh /output/pqc_filter.so
 
 # ============================================================================
@@ -34,6 +63,9 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy liboqs shared library from builder stage
+COPY --from=builder /usr/local/lib/liboqs.so* /usr/local/lib/
 
 # SECURITY: Create non-root user for Envoy
 RUN groupadd --system --gid 101 envoy && \
