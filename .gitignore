@@ -105,3 +105,11 @@ docs/_build/
 credentials.json
 .env
 secrets/
+
+# Internal status
+BAZEL_STATUS.md
+PHASE2_PLAN.md
+PROJECT_STATUS.md
+VIABILITY_ASSESSMENT.md
+
+
